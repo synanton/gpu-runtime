@@ -12,11 +12,11 @@ The **GPU Execution Plane** is a physically isolated, on-premise optimized servi
 It acts as the exclusive bridge between the business logic of Synanton and the physical GPU infrastructure, ensuring a strict separation of concerns.
 
 ### Architectural Invariant
-- **Synanton Main Platform** determines **WHAT** should execute (business intent, model selection, tenant identity).
+- **Synanton Platform** determines **WHAT** should execute (business intent, model selection, tenant identity).
 - **GPU Execution Plane** determines **HOW** it executes (scheduling, admission, runtime lifecycle).
 - **Kubernetes** determines **WHERE** it executes (node placement, GPU device allocation).
 
-> **Critical Constraint**: The Main Platform is strictly prohibited from directly discovering or accessing Kubernetes Pods, GPU nodes, physical GPUs, or vLLM endpoints. The GPU Gateway is the **sole network entry point**.
+> **Critical Constraint**: The Synaton Platform is strictly prohibited from directly discovering or accessing Kubernetes Pods, GPU nodes, physical GPUs, or vLLM endpoints. The GPU Gateway is the **sole network entry point**.
 
 ---
 
@@ -39,7 +39,7 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
-│                     MAIN Synanton PLATFORM                      │
+│                     Synanton PLATFORM                      │
 │  (Business Intent, Model Selection, Tenant Auth, CPU Fallback) │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ gRPC / mTLS
@@ -192,10 +192,10 @@ gpu-runtime/
 
 | Stage     | Title                              | Deliverables                                                 | Status        |
 | --------- | ---------------------------------- | ------------------------------------------------------------ | ------------- |
-| **GPU-1** | Contract & Deterministic Semantics | Protobuf, state machine, error taxonomy, PGV validation, request canonicalization, idempotency contract tests. | ⬜ Not Started |
-| **GPU-2** | Domain Core & Persistence          | `ExecuteUseCase`, `AdmissionService`, PostgreSQL repository, Flyway, `DirectScheduler`, fail-closed logic, concurrent admission tests. | ⬜ Not Started |
-| **GPU-3** | Runtime & Model Lifecycle          | `ModelManager`, `ArtifactResolver`, `VllmRuntime`, shared model cache, graceful draining, lazy reconciliation, runtime retry safety. | ⬜ Not Started |
-| **GPU-4** | Main Platform Integration          | `GpuExecutionClient` in Synanton Core, W3C tracing, `GetStatus` long-polling, CPU fallback handling. | ⬜ Not Started |
+| **GPU-1** | Contract & Deterministic Semantics | Protobuf, state machine, error taxonomy, PGV validation, request canonicalization, idempotency contract tests. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
+| **GPU-2** | Domain Core & Persistence          | `ExecuteUseCase`, `AdmissionService`, PostgreSQL repository, Flyway, `DirectScheduler`, fail-closed logic, concurrent admission tests. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
+| **GPU-3** | Runtime & Model Lifecycle          | `ModelManager`, `ArtifactResolver`, `VllmRuntime`, shared model cache, graceful draining, lazy reconciliation, runtime retry safety. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
+| **GPU-4** | Main Platform Integration          | `GpuExecutionClient` in Synanton Core, W3C tracing, `GetStatus` long-polling, CPU fallback handling. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
 | **GPU-5** | Production Hardening               | HA PostgreSQL (CloudNativePG), NetworkPolicy, PodSecurity, fault injection tests, load testing, Grafana dashboards. | ⬜ Not Started |
 | **GPU-6** | Equalix Evaluation                 | Measure queue fairness, tenant distribution, utilization; implement `EqualixScheduler` only if warranted by data. | ⬜ Future      |
 
@@ -217,7 +217,7 @@ bash
 
 ```
 # Clone the repository
-git clone https://github.com/Synanton/gpu-runtime.git
+git clone https://github.com/synanton/gpu-runtime.git
 cd gpu-runtime
 
 # Build the contract module
@@ -299,12 +299,14 @@ Please ensure your IDE/editor honors the rules in [`.cursor/rules/`](https://./.
 
 ## License
 
-[Proprietary / Synanton Internal] (Adjust according to your actual license).
+Apache 2.0 License – see [LICENSE](https://LICENSE).
 
 ------
 
+## Status ![Status](https://img.shields.io/badge/Status-Experimental-purple)
+
 ## References
 
-- [Synanton Design v1.20 (GPU Execution Plane)](https://github.com/Synanton/platform/blob/main/docs/architecture/Synanton-design-1.20.md)
-- [Synanton Design v1.19](https://github.com/Synanton/platform/blob/main/docs/architecture/Synanton-design-1.19.md)
-- [Synanton Core README](https://github.com/Synanton/platform/blob/main/README.md)
+- [Synanton Design v1.20 (GPU Execution Plane)](https://github.com/synanton/platform/blob/main/docs/architecture/Synanton-design-1.20.md)
+- [Synanton Design v1.19](https://github.com/synanton/platform/blob/main/docs/architecture/Synanton-design-1.19.md)
+- [Synanton Core README](https://github.com/synanton/platform/blob/main/README.md)
