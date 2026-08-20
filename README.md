@@ -194,8 +194,8 @@ gpu-runtime/
 | --------- | ---------------------------------- | ------------------------------------------------------------ | ------------- |
 | **GPU-1** | Contract & Deterministic Semantics | Protobuf, state machine, error taxonomy, PGV validation, request canonicalization, idempotency contract tests. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
 | **GPU-2** | Domain Core & Persistence          | `ExecuteUseCase`, `AdmissionService`, PostgreSQL repository, Flyway, `DirectScheduler`, fail-closed logic, concurrent admission tests. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
-| **GPU-3** | Runtime & Model Lifecycle          | `ModelManager`, `ArtifactResolver`, `VllmRuntime`, shared model cache, graceful draining, lazy reconciliation, runtime retry safety. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
-| **GPU-4** | Main Platform Integration          | `GpuExecutionClient` in Synanton Core, W3C tracing, `GetStatus` long-polling, CPU fallback handling. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
+| **GPU-3** | Runtime & Model Lifecycle          | `ModelManager`, `ArtifactResolver`, `VllmRuntime`, shared model cache, graceful draining, lazy reconciliation, runtime retry safety. | ⬜ Not Started |
+| **GPU-4** | Main Platform Integration          | `GpuExecutionClient` in Synanton Core, W3C tracing, `GetStatus` long-polling, CPU fallback handling. | ⬜ Not Started |
 | **GPU-5** | Production Hardening               | HA PostgreSQL (CloudNativePG), NetworkPolicy, PodSecurity, fault injection tests, load testing, Grafana dashboards. | ⬜ Not Started |
 | **GPU-6** | Equalix Evaluation                 | Measure queue fairness, tenant distribution, utilization; implement `EqualixScheduler` only if warranted by data. | ⬜ Future      |
 
