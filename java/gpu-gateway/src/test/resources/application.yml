@@ -1,0 +1,32 @@
+gpu-gateway:
+  grpc-port: 0
+  max-inbound-message-size-bytes: 4259840
+  dispatch:
+    strategy: stub
+    vllm-endpoint: http://localhost:8000
+    timeout-ms: 5000
+    model-load-timeout-ms: 30000
+  execution:
+    lease-timeout-seconds: 300
+    heartbeat-interval-seconds: 60
+  artifacts:
+    cache-dir: /tmp/test-model-cache
+    registry-base-url: http://localhost:8888
+  models:
+    test-model:
+      concurrency-limit: 8
+      max-input-tokens: 4096
+      runtime-class: vllm-test
+
+spring:
+  datasource:
+    url: jdbc:h2:mem:testdb;DB_CLOSE_DELAY=-1;DB_CLOSE_ON_EXIT=FALSE;MODE=PostgreSQL
+    driver-class-name: org.h2.Driver
+    username: sa
+    password:
+  flyway:
+    enabled: false
+
+logging:
+  level:
+    com.synanton.gpu: DEBUG

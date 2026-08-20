@@ -1,0 +1,8 @@
+{
+  "permissions": {
+    "allow": [
+      "Bash(./gradlew :java:gpu-gateway:compileJava *)",
+      "Bash(./gradlew :java:gpu-gateway:compileTestJava *)"
+    ]
+  }
+}

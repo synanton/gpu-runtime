@@ -1,0 +1,38 @@
+syntax = "proto3";
+
+package synanton.gpu.v1;
+
+import "synanton/gpu/v1/execution.proto";
+
+option java_package = "com.synanton.gpu.v1";
+option java_outer_classname = "CapacityProto";
+option java_multiple_files = true;
+
+// GpuCapacityService provides advisory capacity information.
+// A successful GetCapacity response does NOT reserve GPU capacity.
+// Admission is authoritative only at Execute time.
+service GpuCapacityService {
+    // GetCapacity returns advisory capacity for a model.
+    // The primary platform MUST NOT build correctness assumptions on a prior GetCapacity result.
+    rpc GetCapacity(CapacityRequest) returns (CapacityResponse);
+}
+
+message CapacityRequest {
+    string model_id = 1;
+    // gpu_type is optional; empty means any available GPU class.
+    string gpu_type = 2;
+}
+
+// CapacityResponse is advisory only.
+message CapacityResponse {
+    string model_id = 1;
+    string gpu_type = 2;
+
+    // estimated_queue_depth is the approximate number of requests ahead in the admission queue.
+    int32  estimated_queue_depth        = 3;
+    bool   model_loaded                 = 4;
+    // estimated_available_fraction: 0.0 = saturated, 1.0 = fully available.
+    double estimated_available_fraction = 5;
+    bool   healthy                      = 6;
+    string runtime_class                = 7;
+}

@@ -1,0 +1,79 @@
+---
+description: GPU Execution Plane architectural invariants — enforced at all times
+globs: java/**/*.java,java/**/*.kt,java/**/*.proto
+alwaysApply: true
+---
+
+# GPU Execution Plane — Architectural Invariants
+
+These rules are non-negotiable. Violating any of them breaks the system contract with SynAnton Core.
+
+## 1. Domain isolation
+
+**Domain MUST NOT depend on:** Kubernetes, vLLM, protobuf classes, PostgreSQL/JDBC, Spring adapters,
+infrastructure clients, or any class outside the `com.synanton.gpu.domain` package tree.
+
+Domain interfaces (`ExecutionRepository`, `ExecutionRuntime`, `ArtifactResolver`, `ModelRepository`,
+`ExecutionScheduler`) are the only boundary the domain may cross.
+
+## 2. PostgreSQL is the authoritative execution-state store
+
+Execution state (current phase, timestamps, usage, error) lives exclusively in the `executions`
+PostgreSQL table. No in-memory cache, no Redis, no Cassandra may replicate or cache execution state.
+
+## 3. Redis MUST NOT be introduced
+
+Redis must not be added for execution state, idempotency, admission counters, or any other
+GPU-plane concern. PostgreSQL advisory locks handle admission serialization.
+
+## 4. Topology leakage is forbidden
+
+SynAnton Core (the primary platform) MUST NOT receive Kubernetes pod names, node IPs, GPU device
+IDs, vLLM internal endpoints, or any runtime topology detail. The `synanton.gpu.v1` gRPC contract
+is the only surface visible to Core.
+
+## 5. Runtime retries MUST respect RetryDisposition
+
+Runtime failures are classified as one of:
+- `NOT_ACCEPTED` — safe to retry (request never accepted by runtime)
+- `ACCEPTED_UNKNOWN` — may have executed; caller must check status
+- `COMPLETED_UNKNOWN` — may be complete; caller must check status
+- `DEFINITELY_FAILED` — do not retry
+
+Classification is based on HTTP status codes and response headers, **not** caught Java exceptions.
+Generic `IOException` / `RuntimeException` retry loops are forbidden.
+
+## 6. CPU fallback MUST NOT exist in this repository
+
+CPU fallback policy belongs to SynAnton Core (`../platform`). If the GPU plane cannot execute,
+it returns an error. Core decides whether to fall back to CPU-based inference.
+
+## 7. Equalix is optional and must implement ExecutionScheduler
+
+`EqualixScheduler` (if ever built) MUST implement `ExecutionScheduler` and be wired via Spring
+configuration only. `ExecuteService` and all domain code MUST NOT reference Equalix directly.
+`DirectScheduler` remains the default.
+
+## 8. Sensitive data MUST NOT be logged
+
+Never log: prompts, token contents, embedding vectors, authorization assertions, or API keys.
+Log only: execution_id, request_id, tenant_id, model_id, state transitions, error codes.
+
+## 9. Execution state transitions MUST be validated by the domain
+
+`ExecutionState.canTransitionTo(next)` guards every state change. Adapters (JDBC, gRPC) must call
+this guard before persisting a new state. It is impossible to reach an invalid state through
+normal code paths.
+
+## 10. All concurrency admission decisions MUST be transactionally safe
+
+The admission check (COUNT active executions per model) and the admission INSERT must execute
+inside a single PostgreSQL transaction with a model-level advisory lock:
+
+```sql
+SELECT pg_advisory_xact_lock(?)   -- model lock key
+SELECT COUNT(*) FROM executions WHERE model_id = ? AND state NOT IN ('SUCCEEDED','FAILED','CANCELLED')
+INSERT INTO executions ...
+```
+
+Two concurrent Execute calls cannot both consume the same concurrency slot.

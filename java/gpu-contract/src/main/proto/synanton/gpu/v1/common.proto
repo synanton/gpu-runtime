@@ -1,0 +1,66 @@
+syntax = "proto3";
+
+package synanton.gpu.v1;
+
+option java_package = "com.synanton.gpu.v1";
+option java_outer_classname = "CommonProto";
+option java_multiple_files = true;
+
+// Operation enumerates the GPU workload types supported by the execution plane.
+enum Operation {
+    OPERATION_UNSPECIFIED = 0;
+    SYNTHESIZE = 1;  // LLM text generation via /v1/chat/completions
+    EMBED      = 2;  // Dense vector embedding via /v1/embeddings
+    RERANK     = 3;  // Cross-encoder reranking
+}
+
+// ExecutionOptions contains the immutable, hash-relevant execution parameters.
+// These fields are included in the request hash for idempotency deduplication.
+// Do NOT include request_id, tenant_id, or trace_context — those are not part of
+// the execution semantics.
+message ExecutionOptions {
+    Operation operation   = 1;
+    int32     max_tokens  = 2;
+    // execution_class is an optional scheduling hint (e.g. "interactive", "batch").
+    string execution_class = 3;
+}
+
+// ExecutionRequest is the inbound message from SynAnton Core to the GPU Execution Plane.
+// The caller MUST NOT set execution_id — that field is Gateway-owned.
+//
+// Validation rules enforced at the Gateway boundary:
+//   request_id   required; max 255 chars; idempotency key
+//   tenant_id    required; max 255 chars; assertion only — not a credential
+//   model_id     required; max 255 chars
+//   payload      max 4 MB; operation-specific JSON
+message ExecutionRequest {
+    // request_id is the primary platform's originating request identity.
+    // Mandatory; serves as the idempotency key in the GPU Gateway.
+    // Callers retrying a failed Execute() MUST reuse the same request_id.
+    string request_id = 1;
+
+    // tenant_id is a tenant context assertion, not an authentication credential.
+    string tenant_id = 2;
+
+    string model_id         = 3;
+    ExecutionOptions options = 4;
+
+    // payload is the operation-specific input, JSON-encoded.
+    // For SYNTHESIZE: OpenAI-compatible chat completion request body.
+    // For EMBED:      OpenAI-compatible embedding request body.
+    // For RERANK:     rerank request body (query + passages).
+    bytes payload = 5;
+
+    // trace_context carries OpenTelemetry W3C traceparent/tracestate headers.
+    // NOT included in the request hash.
+    map<string, string> trace_context = 6;
+}
+
+// UsageReport captures GPU execution measurements for cost attribution.
+// The primary platform owns tenant attribution and billing policy; this is raw measurement only.
+message UsageReport {
+    int64  input_tokens         = 1;
+    int64  output_tokens        = 2;
+    double gpu_duration_seconds = 3;
+    string runtime_class        = 4;
+}

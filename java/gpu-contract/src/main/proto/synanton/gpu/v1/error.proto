@@ -1,0 +1,53 @@
+syntax = "proto3";
+
+package synanton.gpu.v1;
+
+option java_package = "com.synanton.gpu.v1";
+option java_outer_classname = "ErrorProto";
+option java_multiple_files = true;
+
+// ErrorCode is the structured error catalogue for the GPU Execution Plane.
+// Retryability:
+//   retryable=true:  MODEL_NOT_READY, RUNTIME_UNAVAILABLE, CONCURRENCY_LIMIT, CAPACITY_EXCEEDED
+//   retryable=false: all others
+enum ErrorCode {
+    ERROR_CODE_UNSPECIFIED = 0;
+
+    // Validation errors
+    INVALID_ARGUMENT  = 1;
+    UNAUTHENTICATED   = 2;
+    PERMISSION_DENIED = 3;
+
+    // Model lifecycle errors
+    MODEL_NOT_FOUND                  = 4;
+    MODEL_NOT_READY                  = 5;  // retryable — async load triggered
+    MODEL_LOAD_FAILED                = 6;
+    MODEL_ARTIFACT_INTEGRITY_FAILURE = 7;
+
+    // Admission errors
+    CONCURRENCY_LIMIT = 8;  // retryable — model at capacity
+    GPU_QUOTA_EXCEEDED = 9;
+    CAPACITY_EXCEEDED  = 10; // retryable — admission queue full
+    ADMISSION_DENIED   = 11;
+
+    // Execution errors
+    EXECUTION_NOT_FOUND = 12;
+    EXECUTION_CANCELLED = 13;
+
+    // Runtime errors
+    RUNTIME_UNAVAILABLE = 14; // retryable — no GPU runtime reachable
+    RUNTIME_TIMEOUT     = 15;
+    RUNTIME_FAILED      = 16;
+
+    // Infrastructure errors
+    DEPENDENCY_UNAVAILABLE = 17;
+    INTERNAL               = 18;
+}
+
+// ErrorDetail carries structured failure detail originating in the GPU Execution Plane.
+// The message field is diagnostic metadata only; the primary platform renders user-facing errors.
+message ErrorDetail {
+    ErrorCode code      = 1;
+    string    message   = 2;  // Diagnostic only; NOT for user-facing rendering
+    bool      retryable = 3;
+}

@@ -1,0 +1,126 @@
+---
+description: Java code generation standards and testing guidelines for hexagonal architecture - Synanton platform
+globs: **/*.java
+alwaysApply: false
+---
+
+# Java Generation Rules
+
+## Role
+
+You are a senior developer, obsessed with clean and fully tested code.
+
+## Code Structure
+
+Use hexagonal architecture packages pattern. The project structure follows this pattern:
+
+```
+src/
+├── adapter/
+│   ├── in/           # Entry points (incoming adapters)
+│   │   ├── grpc/     # gRPC controllers/endpoints
+│   │   ├── rest/     # REST controllers
+│   │   ├── schedule/ # @Scheduled (and Shedlock) triggers - delegate to domain use cases only
+│   │   └── ...       # Other entry point adapters (e.g. kafka, messaging)
+│   └── out/          # Outgoing adapters (external resources)
+│       ├── database/ # Database repositories implementations
+│       ├── client/   # External service clients
+│       └── ...       # Other outgoing adapters
+├── domain/           # Core business logic
+│   ├── service/      # Domain services
+│   ├── model/        # Domain models/entities
+│   └── [UseCase classes directly here, e.g., GetAllTemplatesUseCase.java]
+└── config/           # Configuration classes and files
+```
+
+**Adapter package:**
+- **`adapter/in/`**: Contains all entry points for the application. These are adapters that receive external requests (gRPC endpoints, REST controllers, Kafka listeners, scheduled jobs under `schedule/` that only invoke use cases).
+- **`adapter/out/`**: Contains all outgoing adapters that interact with external resources (database repository implementations, external API clients, Kafka publishers).
+
+**Domain package:**
+- Contains all business logic, services, use cases (directly in domain package, not in subfolder), and domain models. This is the core of the application and must not depend on adapters.
+
+**Config package:**
+- Contains Spring configuration classes, bean definitions, and other configuration files.
+
+## Build System
+
+**GPU Execution Plane uses Gradle with Kotlin DSL** (`build.gradle.kts`). The wrapper is `./gradlew`.
+
+Key build commands:
+```bash
+./gradlew compileJava                         # compile before making changes
+./gradlew test                                # run all tests
+./gradlew :java:<module>:test                 # run tests for a specific module
+./gradlew :java:gpu-gateway:bootRun           # start the GPU Gateway service
+./gradlew build                               # full build (compile + test + package)
+```
+
+**Module layout** (multi-module Gradle build):
+- `java/<module>/build.gradle.kts` - module build file
+- `settings.gradle.kts` - lists all modules
+- `build.gradle.kts` - root build file with shared config
+
+## Guidelines
+
+When generating Java code:
+- Make minimum change possible to complete the task
+- Create multi-char variable names (no single-char variable names)
+- When generating POJOs, use Lombok annotations to avoid boilerplate getters/setters/constructors
+- Prefer `@RequiredArgsConstructor` (Lombok) for dependency injection and `final` field initialization whenever it fits; avoid hand-written constructors that only assign fields
+- Use Java records for immutable domain models
+- Use `rows.getFirst()` instead of `rows.get(0)` where possible
+- Repository classes should return domain objects, not protobuf objects
+- Use case classes should return domain objects; protobuf conversion happens in the gRPC adapter layer
+- Protobuf class fields cannot be null - no need for null checks on them
+
+**Configuration defaults (Spring Boot):**
+- Do not put tunable defaults in Java: no `@Value("${key:DEFAULT}")`, no literal config fallbacks.
+- Put defaults in `application.yml` (including per-profile files) and in test `application.yml` when tests require the property.
+- Inject resolved values only: `@Value("${key}")` or `@ConfigurationProperties` backed by YAML.
+
+**Code Style:**
+- Maximum line length: 120 characters
+- Prefer multi-line builder pattern over one-liners for readability
+
+**Comments and Javadoc:**
+- Add Javadoc on public classes, methods, and fields that form the module API
+- Add brief comments only for non-obvious logic (invariants, external system contracts, multi-step algorithms)
+- Do not restate the code
+
+**Logging:**
+- Use `@Slf4j` annotation with log methods instead of `System.out.print`
+- No need to check logging level before logging
+
+## Project Stack (GPU Execution Plane)
+
+- Java 21
+- Spring Boot 3.x
+- Lombok
+- **Gradle with Kotlin DSL** (not Maven)
+- Protobuf + gRPC
+- PostgreSQL (JDBC + Flyway) — sole source of truth for execution state
+- NO Cassandra, Kafka, or Redis
+
+## Tests
+
+### Global Approach
+
+Two types of tests: integration and unit.
+
+**Unit tests:**
+- Naming: `{ClassName}Test.java`
+- No Spring context or integration test inheritance
+- Only the class under test and its dependencies as mocks
+
+**Integration tests:**
+- Use Spring context; live in `integration/` package
+- Test the app as a black box
+- Cover the happy path; do not test every corner case
+
+### Other
+
+- Integration and unit tests ALWAYS use single object comparison, not field-by-field
+- Test naming: generated names start with `"should"`
+- Use `@InjectMocks` in unit tests where possible
+- Use static imports: `import static org.mockito.Mockito.*`
