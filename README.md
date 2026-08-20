@@ -39,8 +39,8 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Synanton PLATFORM                      │
-│  (Business Intent, Model Selection, Tenant Auth, CPU Fallback) │
+│                     Synanton PLATFORM                           │
+│  (Business Intent, Model Selection, Tenant Auth, CPU Fallback)  │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ gRPC / mTLS
                                 │ Signed Execution Assertion
@@ -49,12 +49,12 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 │                      GPU EXECUTION PLANE                        │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                    GPU Gateway                            │  │
-│  │  (AuthN/AuthZ, Idempotency, Execution State)             │  │
+│  │  (AuthN/AuthZ, Idempotency, Execution State)              │  │
 │  └───────────────────────────┬───────────────────────────────┘  │
 │                              ▼                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                Admission Controller                       │  │
-│  │  (Quotas, Concurrency, Token Limits, Model Capabilities) │  │
+│  │  (Quotas, Concurrency, Token Limits, Model Capabilities)  │  │
 │  └───────────────────────────┬───────────────────────────────┘  │
 │                              ▼                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
@@ -64,17 +64,17 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 │                              ▼                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                   Model Manager                           │  │
-│  │  (Lifecycle, Capabilities, Artifact Resolution)          │  │
+│  │  (Lifecycle, Capabilities, Artifact Resolution)           │  │
 │  └───────────────────────────┬───────────────────────────────┘  │
 │                              ▼                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                  VllmRuntime                              │  │
-│  │  (Execution, Cancellation, Heartbeat, Status)            │  │
+│  │  (Execution, Cancellation, Heartbeat, Status)             │  │
 │  └───────────────────────────┬───────────────────────────────┘  │
 │                              ▼                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
 │  │                       vLLM                                │  │
-│  │  (StatefulSets/Deployments on GPU Nodes)                 │  │
+│  │  (StatefulSets/Deployments on GPU Nodes)                  │  │
 │  └───────────────────────────────────────────────────────────┘  │
 │                                                                 │
 │  PostgreSQL (HA)        Shared Model Cache (ROX)                │
@@ -299,7 +299,7 @@ Please ensure your IDE/editor honors the rules in [`.cursor/rules/`](https://./.
 
 ## License
 
-Apache 2.0 License – see [LICENSE](https://LICENSE).
+Apache 2.0 License – see [LICENSE](LICENSE).
 
 ------
 
