@@ -1,4 +1,4 @@
-# Synanton GPU Execution Plane
+# Synanton GPU Runtime
 
 [![Status](https://img.shields.io/badge/Status-Development-blue)](https://github.com/Synanton/gpu-runtime)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
@@ -7,13 +7,13 @@
 
 ## Overview
 
-The **GPU Execution Plane** is a physically isolated, on-premise optimized service responsible for executing GPU-intensive inference workloads (LLMs, Embeddings, Reranking) on behalf of the **Synanton Platform**.
+The **GPU Runtime** is a physically isolated, on-premise optimized service responsible for executing GPU-intensive inference workloads (LLMs, Embeddings, Reranking) on behalf of the **Synanton Platform**.
 
 It acts as the exclusive bridge between the business logic of Synanton and the physical GPU infrastructure, ensuring a strict separation of concerns.
 
 ### Architectural Invariant
 - **Synanton Platform** determines **WHAT** should execute (business intent, model selection, tenant identity).
-- **GPU Execution Plane** determines **HOW** it executes (scheduling, admission, runtime lifecycle).
+- **GPU Runtime** determines **HOW** it executes (scheduling, admission, runtime lifecycle).
 - **Kubernetes** determines **WHERE** it executes (node placement, GPU device allocation).
 
 > **Critical Constraint**: The Synaton Platform is strictly prohibited from directly discovering or accessing Kubernetes Pods, GPU nodes, physical GPUs, or vLLM endpoints. The GPU Gateway is the **sole network entry point**.
