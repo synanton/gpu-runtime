@@ -83,14 +83,10 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 
 ### State Machine (Simplified)
 
-text
-
-```
+```text
 ACCEPTED → (Model Hot) → RUNNING → SUCCEEDED / FAILED / CANCELLED
 ACCEPTED → QUEUED → MODEL_LOADING → RUNNING → SUCCEEDED / FAILED / CANCELLED
 ```
-
-
 
 ------
 
@@ -115,9 +111,7 @@ ACCEPTED → QUEUED → MODEL_LOADING → RUNNING → SUCCEEDED / FAILED / CANCE
 
 ## Repository Structure
 
-text
-
-```
+```text
 gpu-runtime/
 ├── build.gradle.kts                     # Root build
 ├── settings.gradle.kts
@@ -146,11 +140,7 @@ gpu-runtime/
 │           │   │   └── out/             # Database, Runtime, Registry, Security
 │           │   ├── domain/              # Use Cases, Models, Services
 │           │   │   ├── model/
-│           │   │   ├── service/
-│           │   │   ├── ExecuteUseCase.java
-│           │   │   ├── CancelUseCase.java
-│           │   │   ├── GetStatusUseCase.java
-│           │   │   └── GetCapacityUseCase.java
+│           │   │   └── service/
 │           │   └── config/
 │           └── resources/
 │               ├── application.yml
@@ -183,8 +173,6 @@ gpu-runtime/
 │
 └── README.md
 ```
-
-
 
 ------
 
