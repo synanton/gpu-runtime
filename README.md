@@ -1,4 +1,4 @@
-# Synanton GPU Runtime
+# Synanton GPU Execution Plane
 
 [![Status](https://img.shields.io/badge/Status-Development-blue)](https://github.com/Synanton/gpu-runtime)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
@@ -7,16 +7,16 @@
 
 ## Overview
 
-The **GPU Runtime** is a physically isolated, on-premise optimized service responsible for executing GPU-intensive inference workloads (LLMs, Embeddings, Reranking) on behalf of the **Synanton Platform**.
+The **GPU Execution Plane** is a physically isolated, on-premise optimized service responsible for executing GPU-intensive inference workloads (LLMs, Embeddings, Reranking) on behalf of the **Synanton Platform**.
 
 It acts as the exclusive bridge between the business logic of Synanton and the physical GPU infrastructure, ensuring a strict separation of concerns.
 
 ### Architectural Invariant
-- **Synanton Platform** determines **WHAT** should execute (business intent, model selection, tenant identity).
-- **GPU Runtime** determines **HOW** it executes (scheduling, admission, runtime lifecycle).
+- **Synanton Main Platform** determines **WHAT** should execute (business intent, model selection, tenant identity).
+- **GPU Execution Plane** determines **HOW** it executes (scheduling, admission, runtime lifecycle).
 - **Kubernetes** determines **WHERE** it executes (node placement, GPU device allocation).
 
-> **Critical Constraint**: The Synaton Platform is strictly prohibited from directly discovering or accessing Kubernetes Pods, GPU nodes, physical GPUs, or vLLM endpoints. The GPU Gateway is the **sole network entry point**.
+> **Critical Constraint**: The Main Platform is strictly prohibited from directly discovering or accessing Kubernetes Pods, GPU nodes, physical GPUs, or vLLM endpoints. The GPU Gateway is the **sole network entry point**.
 
 ---
 
@@ -39,7 +39,7 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 
 ```text
 ┌─────────────────────────────────────────────────────────────────┐
-│                     Synanton PLATFORM                           │
+│                     MAIN Synanton PLATFORM                      │
 │  (Business Intent, Model Selection, Tenant Auth, CPU Fallback)  │
 └───────────────────────────────┬─────────────────────────────────┘
                                 │ gRPC / mTLS
@@ -83,12 +83,36 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 
 ### State Machine (Simplified)
 
+
+
 ```text
 ACCEPTED → (Model Hot) → RUNNING → SUCCEEDED / FAILED / CANCELLED
 ACCEPTED → QUEUED → MODEL_LOADING → RUNNING → SUCCEEDED / FAILED / CANCELLED
+
+                        ACCEPTED
+                           │
+                      ┌────┴────┐
+                      │         │
+                 model READY  model loading
+                      │         │
+                      │       QUEUED ──────────────────────────┐
+                      │         │                              │
+                      │   MODEL_LOADING ─── load failure       │
+                      │         │                              │
+                      └────►  QUEUED (ready to dispatch)       │
+                               │                               │
+                            RUNNING ◄──────────────────────────┘
+                               │
+                  ┌────────────┼────────────┐
+                  ▼            ▼            ▼
+             SUCCEEDED      FAILED      CANCELLED
 ```
 
-------
+
+
+All non-terminal states can transition to `FAILED` or `CANCELLED`. Terminal states are irreversible.
+
+---
 
 ## Technology Stack
 
@@ -98,22 +122,25 @@ ACCEPTED → QUEUED → MODEL_LOADING → RUNNING → SUCCEEDED / FAILED / CANCE
 | **Framework**        | Spring Boot 3.x                                         |
 | **Build**            | Gradle (Kotlin DSL)                                     |
 | **RPC / API**        | gRPC + Protobuf + Protovalidate (PGV)                   |
-| **Persistence**      | PostgreSQL + Flyway (JDBC `JdbcTemplate`)               |
+| **Persistence**      | PostgreSQL + Flyway (plain JDBC / `JdbcTemplate`)       |
 | **Observability**    | Micrometer + Prometheus, OpenTelemetry                  |
 | **Testing**          | JUnit 5, AssertJ, Mockito, Testcontainers               |
 | **Orchestration**    | Kubernetes + Helm                                       |
 | **GPU Runtime**      | vLLM (initial), TGI (future)                            |
 | **Artifact Storage** | Internal Registry + Shared Read-Only Cache (NFS/CephFS) |
 
-> **Important**: The GPU Execution Plane deliberately **does not** use Redis, Kafka, or Cassandra. PostgreSQL remains the sole,  authoritative source of execution state to keep the system small and  deterministic.
+> **Important**: The GPU Execution Plane deliberately **does not** use Redis, Kafka, or Cassandra. PostgreSQL is the sole authoritative source of execution state.
 
 ------
 
 ## Repository Structure
 
-```text
+text
+
+```
 gpu-runtime/
 ├── build.gradle.kts                     # Root build
+├── build.gradle.kts
 ├── settings.gradle.kts
 ├── gradle.properties
 │
@@ -121,6 +148,9 @@ gpu-runtime/
 │   └── rules/                           # AI-assisted development rules
 │       ├── java-rules.mdc               # Synanton Core Java conventions
 │       └── gpu-execution-rules.mdc      # GPU-specific invariants
+├── doc/
+│   ├── GPU Execution Plane Implementation Plan v1.20.md
+│   └── GPU Execution Plane Implementation Plan v1.21.md
 │
 ├── java/
 │   ├── gpu-contract/                    # Shared gRPC protobuf contracts
@@ -130,6 +160,12 @@ gpu-runtime/
 │   │       ├── capacity.proto
 │   │       ├── common.proto
 │   │       └── error.proto
+│   ├── gpu-contract/                    # Protobuf contracts (generated gRPC stubs)
+│   │   └── src/main/proto/synanton/gpu/v1/
+│   │       ├── execution.proto          # Execute, Cancel, GetStatus RPCs
+│   │       ├── capacity.proto           # GetCapacity RPC
+│   │       ├── common.proto             # Shared types
+│   │       └── error.proto              # Error taxonomy enum
 │   │
 │   └── gpu-gateway/                     # Main Spring Boot service
 │       ├── build.gradle.kts
@@ -166,42 +202,113 @@ gpu-runtime/
 │       ├── namespace.yaml
 │       ├── mtls/
 │       └── monitoring/
+│       └── src/main/java/com/synanton/gpu/
+│           ├── adapter/
+│           │   ├── in/grpc/             # GpuExecutionGrpcAdapter, GpuCapacityGrpcAdapter
+│           │   └── out/                 # [GPU-3] database/, runtime/, registry/, schedule/, model/
+│           ├── domain/
+│           │   ├── model/               # Execution, ExecutionState, ModelCapabilities, …
+│           │   ├── port/
+│           │   │   ├── in/              # ExecuteUseCase, CancelUseCase, GetStatusUseCase, GetCapacityUseCase
+│           │   │   └── out/             # ExecutionRepository, ExecutionRuntime, ModelManager, …
+│           │   └── service/             # ExecuteService, AdmissionService, HeartbeatManager, …
+│           └── config/                  # GpuGatewayProperties, DomainConfig, GrpcServerLifecycle
 │
 ├── scripts/
 │   ├── deploy-onprem.sh
 │   └── smoke-test.sh
 │
 └── README.md
+├── helm/                                # [GPU-5] Kubernetes Helm charts
+└── deploy/                              # [GPU-5] Additional K8s manifests
 ```
 
 ------
 
 ## Implementation Roadmap
 
-| Stage     | Title                              | Deliverables                                                 | Status        |
-| --------- | ---------------------------------- | ------------------------------------------------------------ | ------------- |
-| **GPU-1** | Contract & Deterministic Semantics | Protobuf, state machine, error taxonomy, PGV validation, request canonicalization, idempotency contract tests. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
-| **GPU-2** | Domain Core & Persistence          | `ExecuteUseCase`, `AdmissionService`, PostgreSQL repository, Flyway, `DirectScheduler`, fail-closed logic, concurrent admission tests. | ![Status](https://img.shields.io/badge/Status-Experimental-purple) |
-| **GPU-3** | Runtime & Model Lifecycle          | `ModelManager`, `ArtifactResolver`, `VllmRuntime`, shared model cache, graceful draining, lazy reconciliation, runtime retry safety. | ⬜ Not Started |
-| **GPU-4** | Main Platform Integration          | `GpuExecutionClient` in Synanton Core, W3C tracing, `GetStatus` long-polling, CPU fallback handling. | ⬜ Not Started |
-| **GPU-5** | Production Hardening               | HA PostgreSQL (CloudNativePG), NetworkPolicy, PodSecurity, fault injection tests, load testing, Grafana dashboards. | ⬜ Not Started |
-| **GPU-6** | Equalix Evaluation                 | Measure queue fairness, tenant distribution, utilization; implement `EqualixScheduler` only if warranted by data. | ⬜ Future      |
+---------|------------------------------------|------------------------------------------------------------------------------------------------------|--------------------|
+| **GPU-1** | Contract & Deterministic Semantics | Protobuf definitions, error taxonomy, PGV validation, request canonicalization, idempotency contract | ✅ Complete         |
+| **GPU-2** | Domain Core & Persistence          | Use cases, AdmissionService, PostgreSQL schema (Flyway), advisory-lock admission, concurrency tests  | ✅ Complete         |
+| **GPU-3** | Runtime & Model Lifecycle          | Outbound port interfaces, JdbcExecutionRepository, VllmRuntime, ModelManager, ArtifactResolver, heartbeat, lazy reconciliation | ✅ Complete     |
+| **GPU-4** | Main Platform Integration          | `GpuExecutionClient` in Synanton Core, W3C tracing, long-polling, CPU fallback in Core              | ⬜ Not Started      |
+| **GPU-5** | Production Hardening               | HA PostgreSQL (CloudNativePG), Helm charts, NetworkPolicy, fault injection, load tests, Grafana      | ⬜ Not Started      |
+| **GPU-6** | Equalix Evaluation                 | Measure queue fairness and utilization; implement `EqualixScheduler` only if data justifies it       | ⬜ Future           |
+
+### GPU-3 Checklist
+
+#### Artifact lifecycle
+- [x] `ArtifactResolver` interface + `SecureRegistryFetcher` implementation
+- [x] SHA-256 artifact digest verification
+- [x] Shared model cache (`/model-cache/<model-id>/<digest>`)
+- [x] Distributed PostgreSQL advisory locking (exactly one downloader per `(model_id, digest)`)
+- [x] Second cache check after acquiring lock
+- [x] Atomic artifact publication (staging → rename)
+
+#### Runtime lifecycle
+- [x] `ExecutionRuntime` port interface with `RuntimeResult` sealed type
+- [x] `VllmRuntime` implementation (HTTP → vLLM `/v1/completions` + `/v1/chat/completions`)
+- [x] `StubExecutionRuntime` for local/CI testing without vLLM
+- [x] `RetryDisposition` domain enum
+- [x] Runtime acceptance semantics explicitly detected (HTTP status, not `IOException`)
+- [x] Automatic retry only for `NOT_ACCEPTED`
+- [x] RUNNING executions receive heartbeat lease refresh
+- [x] `HeartbeatManager` implementation
+- [x] Heartbeat stops on terminal state
+
+#### Persistence
+- [x] `ExecutionRepository` port interface
+- [x] `JdbcExecutionRepository` (advisory lock, predicated UPDATEs, JSONB usage/error)
+- [x] `ConfigModelRepository` (capabilities from `gpu-gateway.models` config)
 
 ------
+#### Model manager
+- [x] `ModelManager` port interface
+- [x] `DefaultModelManager` implementation
+- [x] `MODEL_LOADING` execution state explicitly tracked
+- [x] Load failures cascade to QUEUED executions (`failAllQueuedForModel`)
 
 ## Getting Started (Development)
+#### Reconciliation
+- [x] `GetStatusService` lazy reconciliation logic
+- [x] Expired RUNNING leases trigger runtime ping
+- [x] Live runtime refreshes lease; dead runtime → `RUNTIME_UNAVAILABLE`
+- [x] Terminal executions protected by predicated UPDATE
 
-### Prerequisites
+#### Tests
+- [x] 39 unit tests passing (domain, adapters, scheduler, model manager)
+- [ ] Integration tests (JdbcExecutionRepository, GpuExecutionIntegrationTest, ConcurrencyAdmissionTest) — written, require Docker to run
+
+---
+
+## Core Invariants
+
+These are enforced by the architecture and encoded into `.cursor/rules/gpu-execution-rules.mdc`:
+
+1. **PostgreSQL is the only source of truth** for execution state. No Redis, Cassandra, or in-memory shadow.
+2. **Fail-closed idempotency**: `Execute()` never dispatches an unrecorded request; PostgreSQL failure → `Execute()` failure.
+3. **Transactional admission**: concurrency slots are checked and consumed inside a single PostgreSQL advisory-locked transaction.
+4. **No background controllers**: reconciliation is lazy, triggered by `GetStatus()` lease expiry.
+5. **Retry semantics from protocol, not exceptions**: `RetryDisposition` is derived from HTTP status codes, not `IOException`.
+6. **Exactly one artifact download** per `(model_id, digest)` across all Gateway replicas.
+7. **Artifact integrity before availability**: SHA-256 verified, staged, then atomically published.
+8. **CPU fallback is prohibited here**: belongs entirely to the Synanton Platform.
+9. **No prompt logging**: prompts, tokens, and authorization assertions are never written to logs or traces.
+10. **Equalix is optional**: `ExecutionScheduler` interface allows swapping `DirectScheduler` → `EqualixScheduler` without touching domain or use-case code.
+
+---
+
+## Getting Started
 
 - Java 21 (Eclipse Temurin or OpenJDK)
-- Docker (for Testcontainers and local PostgreSQL)
-- `./gradlew` wrapper
+- Docker (for Testcontainers — used by integration tests)
+- `./gradlew` wrapper (included)
 
-### Build & Test (PR #1)
+### Build & Test
 
-The first PR establishes the project skeleton and contract without external dependencies.
-
-bash
+```bash
+# Compile all modules
+./gradlew compileJava
 
 ```
 # Clone the repository
@@ -214,76 +321,44 @@ cd gpu-runtime
 # Run unit tests (no infrastructure required)
 ./gradlew :java:gpu-gateway:test
 
-# Run all checks
+# Run integration tests (Testcontainers PostgreSQL — requires Docker)
+# Remove @Disabled from JdbcExecutionRepositoryTest, GpuExecutionIntegrationTest,
+# ConcurrencyAdmissionTest, then run with DOCKER_HOST set to your daemon socket:
+DOCKER_HOST=unix:///path/to/docker.sock ./gradlew :java:gpu-gateway:test
+
+# Full build + check
 ./gradlew check
 ```
 
+> Integration tests spin up a real PostgreSQL 16 container. They are `@Disabled` by default to allow clean CI without Docker. Enable them manually when Docker is available.
 
+### Configuration
 
-### Local Integration Testing (GPU-2+)
+Key properties in `application.yml` (all overridable via environment variables):
 
-For testing against a real PostgreSQL instance (via Testcontainers):
+| Property | Env var | Default | Purpose |
+|---|---|---|---|
+| `gpu-gateway.grpc-port` | `GPU_GATEWAY_GRPC_PORT` | `9090` | gRPC listen port |
+| `gpu-gateway.dispatch.strategy` | `GPU_GATEWAY_DISPATCH_STRATEGY` | `stub` | `stub` or `direct` (vLLM) |
+| `gpu-gateway.dispatch.vllm-endpoint` | `VLLM_ENDPOINT` | `http://vllm-service:8000` | vLLM base URL |
+| `gpu-gateway.execution.lease-timeout-seconds` | `EXECUTION_LEASE_TIMEOUT_SECONDS` | `300` | Heartbeat lease window |
+| `gpu-gateway.execution.heartbeat-interval-seconds` | `EXECUTION_HEARTBEAT_INTERVAL_SECONDS` | `60` | Heartbeat fire interval |
+| `gpu-gateway.artifacts.cache-dir` | `MODEL_CACHE_DIR` | `/model-cache` | Shared artifact cache root |
+| `gpu-gateway.models.<id>.concurrency-limit` | — | — | Max parallel executions per model |
 
-bash
+Example model configuration:
 
+```yaml
+gpu-gateway:
+  models:
+    llama-3-8b:
+      concurrency-limit: 8
+      max-input-tokens: 32768
+      runtime-class: vllm-a100
+      digest: sha256:abc123...
 ```
-./gradlew :java:gpu-gateway:integrationTest
-```
 
-
-
-> **Note**: GPU performance testing requires a dedicated on-prem cluster with  NVIDIA GPUs and vLLM. Local Kind clusters are suitable for GPU-1/GPU-2  only.
-
-------
-
-## Deployment (On-Prem)
-
-1. **Prepare the Kubernetes cluster**: Ensure GPU nodes are tainted/labeled and have NVIDIA drivers + Device Plugin installed.
-
-2. **Configure Secrets**: Create Kubernetes secrets for mTLS (`tls.crt`, `tls.key`), Platform CA (`ca.crt`), and PostgreSQL credentials.
-
-3. **Install via Helm**:
-
-   bash
-
-   ```
-   helm install gpu-runtime ./helm/gpu-runtime \
-     --namespace gpu-system \
-     --create-namespace \
-     --set tls.existingSecret=gpu-gateway-tls \
-     --set postgresql.ha.enabled=true
-   ```
-
-   
-
-Refer to the [Helm README](https://./helm/gpu-runtime/README.md) for detailed configuration options (runtime classes, model registry endpoints, cache paths).
-
-------
-
-## Core Invariants (The "Rules")
-
-These are encoded into the repository's Cursor rules and are enforced by the architecture:
-
-1. **Physical Isolation**: The Main Platform has no network path to vLLM, K8s API, or PostgreSQL.
-2. **Logical Capacity**: `GetCapacity()` returns `available_concurrency`, never GPU IDs or node names.
-3. **Fail-Closed Idempotency**: If PostgreSQL is unavailable, `Execute()` fails. It never dispatches an unrecorded request.
-4. **Transactional Admission**: Concurrency limits are enforced via PostgreSQL advisory locks.
-5. **No Background Controllers**: Reconciliation is lazy (inside `GetStatus`); no Kubernetes operator in v1.20.
-6. **CPU Fallback Prohibition**: This repository contains zero logic for CPU inference fallback—that belongs to the Main Platform.
-7. **Artifact Integrity**: Every model digest is verified before the cache makes it available to vLLM.
-8. **No Prompt Logging**: Prompts, tokens, and authorization assertions are strictly omitted from logs and traces.
-
-------
-
-## Contributing
-
-Please ensure your IDE/editor honors the rules in [`.cursor/rules/`](https://./.cursor/rules/) before submitting PRs.
-
-- All domain logic must be unit-testable without Spring context.
-- Integration tests must use Testcontainers.
-- Follow the Synanton Core Gradle conventions (Kotlin DSL, `compileJava`, `test` tasks).
-
-------
+---
 
 ## License
 
@@ -291,10 +366,8 @@ Apache 2.0 License – see [LICENSE](LICENSE).
 
 ------
 
-## Status ![Status](https://img.shields.io/badge/Status-Experimental-purple)
-
 ## References
 
-- [Synanton Design v1.20 (GPU Execution Plane)](https://github.com/synanton/platform/blob/main/docs/architecture/Synanton-design-1.20.md)
-- [Synanton Design v1.19](https://github.com/synanton/platform/blob/main/docs/architecture/Synanton-design-1.19.md)
-- [Synanton Core README](https://github.com/synanton/platform/blob/main/README.md)
+- [Synanton Design v1.20 (GPU Execution Plane)](https://github.com/Synanton/platform/blob/main/docs/architecture/Synanton-design-1.20.md)
+- [Synanton Design v1.19](https://github.com/Synanton/platform/blob/main/docs/architecture/Synanton-design-1.19.md)
+- [Synanton Core README](https://github.com/Synanton/platform/blob/main/README.md)

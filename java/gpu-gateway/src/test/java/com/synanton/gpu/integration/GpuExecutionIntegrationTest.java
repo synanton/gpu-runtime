@@ -23,7 +23,10 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
 /**
  * Integration test: full Spring context + real PostgreSQL via Testcontainers + in-process gRPC.
  * Uses StubExecutionRuntime, so no live vLLM required.
+ *
+ * <p>Requires Docker (Colima or Docker Desktop). Run manually with Docker available.
  */
+//@org.junit.jupiter.api.Disabled("Requires Docker — run manually with Colima/Docker Desktop")
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
@@ -49,13 +52,14 @@ class GpuExecutionIntegrationTest {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
     }
 
     @Autowired
     private ExecutionRepository executionRepository;
 
     @Autowired
-    private org.springframework.core.env.Environment env;
+    private com.synanton.gpu.config.GrpcServerLifecycle grpcServerLifecycle;
 
     private ManagedChannel channel;
     private GpuExecutionServiceGrpc.GpuExecutionServiceBlockingStub executionStub;
@@ -63,8 +67,8 @@ class GpuExecutionIntegrationTest {
 
     @BeforeEach
     void setUp() {
-        String grpcPort = env.getProperty("gpu-gateway.grpc-port", "9090");
-        channel = ManagedChannelBuilder.forAddress("localhost", Integer.parseInt(grpcPort))
+        int grpcPort = grpcServerLifecycle.getBoundPort();
+        channel = ManagedChannelBuilder.forAddress("localhost", grpcPort)
                 .usePlaintext()
                 .build();
         executionStub = GpuExecutionServiceGrpc.newBlockingStub(channel);

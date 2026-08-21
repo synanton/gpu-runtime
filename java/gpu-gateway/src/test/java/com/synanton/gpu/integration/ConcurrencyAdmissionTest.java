@@ -27,7 +27,10 @@ import static org.assertj.core.api.Assertions.assertThat;
  *
  * <p>Sends 100 concurrent Execute requests with concurrency limit = 8.
  * Expects: exactly 8 admitted (FAILED via StubRuntime), 92 rejected with RESOURCE_EXHAUSTED.
+ *
+ * <p>Requires Docker (Colima or Docker Desktop). Run manually with Docker available.
  */
+@org.junit.jupiter.api.Disabled("Requires Docker — run manually with Colima/Docker Desktop")
 @SpringBootTest(
         webEnvironment = SpringBootTest.WebEnvironment.NONE,
         properties = {
@@ -53,18 +56,19 @@ class ConcurrencyAdmissionTest {
         registry.add("spring.datasource.url", postgres::getJdbcUrl);
         registry.add("spring.datasource.username", postgres::getUsername);
         registry.add("spring.datasource.password", postgres::getPassword);
+        registry.add("spring.datasource.driver-class-name", () -> "org.postgresql.Driver");
     }
 
     @org.springframework.beans.factory.annotation.Autowired
-    private org.springframework.core.env.Environment env;
+    private com.synanton.gpu.config.GrpcServerLifecycle grpcServerLifecycle;
 
     private ManagedChannel channel;
     private GpuExecutionServiceGrpc.GpuExecutionServiceBlockingStub stub;
 
     @BeforeEach
     void setUp() {
-        String grpcPort = env.getProperty("gpu-gateway.grpc-port", "9090");
-        channel = ManagedChannelBuilder.forAddress("localhost", Integer.parseInt(grpcPort))
+        int grpcPort = grpcServerLifecycle.getBoundPort();
+        channel = ManagedChannelBuilder.forAddress("localhost", grpcPort)
                 .usePlaintext()
                 .build();
         stub = GpuExecutionServiceGrpc.newBlockingStub(channel);

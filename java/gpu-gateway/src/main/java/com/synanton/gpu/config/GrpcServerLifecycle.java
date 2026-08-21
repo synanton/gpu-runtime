@@ -40,11 +40,19 @@ public class GrpcServerLifecycle implements SmartLifecycle {
                     .addService(capacityAdapter)
                     .build()
                     .start();
-            log.info("gRPC server started on port {}", properties.getGrpcPort());
+            log.info("gRPC server started on port {}", server.getPort());
         } catch (IOException e) {
             throw new IllegalStateException(
                     "Failed to start gRPC server on port " + properties.getGrpcPort(), e);
         }
+    }
+
+    /** Actual bound port (ephemeral when {@code grpc-port} is 0). */
+    public int getBoundPort() {
+        if (server == null) {
+            throw new IllegalStateException("gRPC server has not started");
+        }
+        return server.getPort();
     }
 
     @Override

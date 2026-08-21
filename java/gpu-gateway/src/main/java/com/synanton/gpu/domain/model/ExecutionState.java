@@ -37,8 +37,8 @@ public enum ExecutionState {
         }
         return switch (this) {
             case ACCEPTED      -> next == QUEUED        || next == FAILED || next == CANCELLED;
-            case QUEUED        -> next == MODEL_LOADING || next == FAILED || next == CANCELLED;
-            case MODEL_LOADING -> next == RUNNING       || next == FAILED || next == CANCELLED;
+            case QUEUED        -> next == MODEL_LOADING || next == RUNNING || next == FAILED || next == CANCELLED;
+            case MODEL_LOADING -> next == QUEUED        || next == RUNNING || next == FAILED || next == CANCELLED;
             case RUNNING       -> next == SUCCEEDED     || next == FAILED || next == CANCELLED;
             default            -> false;
         };

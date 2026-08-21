@@ -45,3 +45,13 @@ dependencies {
     testCompileOnly(libs.lombok)
     testAnnotationProcessor(libs.lombok)
 }
+
+tasks.test {
+    useJUnitPlatform()
+
+    // Docker Engine 25+ rejects docker-java's default API (1.32). Pin 1.44 as a floor.
+    // Existing DOCKER_HOST / TESTCONTAINERS_* from the environment are inherited.
+    systemProperty("api.version", "1.44")
+    systemProperty("docker.api.version", "1.44")
+    environment("DOCKER_API_VERSION", "1.44")
+}

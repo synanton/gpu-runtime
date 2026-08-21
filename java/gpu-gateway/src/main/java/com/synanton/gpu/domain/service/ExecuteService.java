@@ -7,11 +7,8 @@ import com.synanton.gpu.v1.ExecutionRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
-import org.springframework.transaction.annotation.Transactional;
 
-import java.time.Instant;
 import java.util.Optional;
-import java.util.UUID;
 
 /**
  * Core use case: admit, persist, dispatch, and record a GPU execution.
@@ -31,7 +28,7 @@ public class ExecuteService implements ExecuteUseCase {
 
     private final RequestCanonicalizer canonicalizer;
     private final IdempotencyService idempotencyService;
-    private final AdmissionService admissionService;
+    private final ExecutionAdmissionService executionAdmissionService;
     private final ExecutionRepository executionRepository;
     private final ExecutionScheduler executionScheduler;
     private final ExecutionRuntime executionRuntime;
@@ -52,50 +49,13 @@ public class ExecuteService implements ExecuteUseCase {
         }
 
         // Admission path: serialized per-model inside a PostgreSQL transaction
-        Execution admitted = admitAndPersist(request, requestHash);
+        Execution admitted = executionAdmissionService.admitAndPersist(request, requestHash);
         if (admitted.state().isTerminal()) {
             return admitted; // Race: another thread completed it
         }
 
         // GPU-3 execution path: model load → schedule → dispatch with heartbeat
         return loadAndDispatch(request, admitted);
-    }
-
-    /**
-     * Runs the full admission sequence inside a single transaction:
-     * advisory lock → idempotency re-check → field validation → concurrency check → INSERT.
-     */
-    @Transactional
-    protected Execution admitAndPersist(ExecutionRequest request, String requestHash) {
-        executionRepository.acquireModelAdmissionLock(request.getModelId());
-
-        // Re-check inside the lock — another thread may have raced ahead
-        Optional<Execution> raceExecution =
-                idempotencyService.lookupExistingExecution(request.getRequestId(), requestHash);
-        if (raceExecution.isPresent()) {
-            log.debug("Idempotency hit inside admission lock for request_id={}", request.getRequestId());
-            return raceExecution.get();
-        }
-
-        ModelCapabilities capabilities = admissionService.admit(request);
-
-        String executionId = UUID.randomUUID().toString();
-        Instant now = Instant.now();
-
-        Execution execution = new Execution(
-                executionId,
-                request.getRequestId(),
-                requestHash,
-                request.getTenantId(),
-                request.getModelId(),
-                ExecutionState.ACCEPTED,
-                capabilities.runtimeClass(),
-                now, now, null, null, null, null, null
-        );
-        executionRepository.save(execution);
-        log.info("Admitted execution_id={} model={} request_id={}",
-                executionId, request.getModelId(), request.getRequestId());
-        return execution;
     }
 
     /**
