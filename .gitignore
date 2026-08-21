@@ -10,7 +10,6 @@ build/
 *.iws
 *.iml
 *.ipr
-out/
 .vscode/
 
 # macOS
