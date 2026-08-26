@@ -38,3 +38,14 @@ tasks.register("buildAll") {
     description = "Build every module"
     dependsOn(subprojects.map { it.tasks.named("build") })
 }
+
+tasks.register<Exec>("verifyGpuContractMirror") {
+    group = "verification"
+    description = "Verify the GPU contract matches the platform repository copy"
+    commandLine("./scripts/verify-gpu-contract-mirror.sh")
+    isIgnoreExitValue = false
+}
+
+tasks.named("check") {
+    dependsOn("verifyGpuContractMirror")
+}

@@ -3,7 +3,7 @@ package com.synanton.gpu.adapter.out.schedule;
 import com.synanton.gpu.domain.model.ModelCapabilities;
 import com.synanton.gpu.domain.model.RuntimeTarget;
 import com.synanton.gpu.domain.port.out.ExecutionScheduler;
-import com.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;

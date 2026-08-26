@@ -4,7 +4,7 @@ import com.synanton.gpu.domain.model.Execution;
 import com.synanton.gpu.domain.model.ExecutionState;
 import com.synanton.gpu.domain.model.ModelCapabilities;
 import com.synanton.gpu.domain.port.out.ExecutionRepository;
-import com.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -32,7 +32,7 @@ public class ExecutionAdmissionService {
      */
     @Transactional
     public Execution admitAndPersist(ExecutionRequest request, String requestHash) {
-        executionRepository.acquireModelAdmissionLock(request.getModelId());
+        executionRepository.acquireModelAdmissionLock(request.getModel());
 
         Optional<Execution> raceExecution =
                 idempotencyService.lookupExistingExecution(request.getRequestId(), requestHash);
@@ -51,14 +51,14 @@ public class ExecutionAdmissionService {
                 request.getRequestId(),
                 requestHash,
                 request.getTenantId(),
-                request.getModelId(),
+                request.getModel(),
                 ExecutionState.ACCEPTED,
                 capabilities.runtimeClass(),
                 now, now, null, null, null, null, null
         );
         executionRepository.save(execution);
         log.info("Admitted execution_id={} model={} request_id={}",
-                executionId, request.getModelId(), request.getRequestId());
+                executionId, request.getModel(), request.getRequestId());
         return execution;
     }
 }

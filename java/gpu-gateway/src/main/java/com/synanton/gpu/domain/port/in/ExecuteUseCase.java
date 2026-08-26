@@ -1,7 +1,7 @@
 package com.synanton.gpu.domain.port.in;
 
 import com.synanton.gpu.domain.model.Execution;
-import com.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionRequest;
 
 /**
  * Inbound port for submitting a GPU execution request.

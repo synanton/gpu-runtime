@@ -1,6 +1,6 @@
 // gpu-contract: slim library owning the synanton.gpu.v1 protobuf contract.
+// Byte-identical with platform/java/gpu-contract (java_package org.synanton.gpu.v1).
 // Both gpu-gateway (server) and the platform gateway (client) depend on this module for generated stubs.
-// Nothing in this module may depend on gpu-execution-plane internals or platform internals.
 
 plugins {
     java

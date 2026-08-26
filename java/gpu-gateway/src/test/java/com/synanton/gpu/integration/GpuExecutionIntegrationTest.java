@@ -2,7 +2,7 @@ package com.synanton.gpu.integration;
 
 import com.google.protobuf.ByteString;
 import com.synanton.gpu.domain.port.out.ExecutionRepository;
-import com.synanton.gpu.v1.*;
+import org.synanton.gpu.v1.*;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
@@ -62,8 +62,7 @@ class GpuExecutionIntegrationTest {
     private com.synanton.gpu.config.GrpcServerLifecycle grpcServerLifecycle;
 
     private ManagedChannel channel;
-    private GpuExecutionServiceGrpc.GpuExecutionServiceBlockingStub executionStub;
-    private GpuCapacityServiceGrpc.GpuCapacityServiceBlockingStub capacityStub;
+    private GPUExecutionServiceGrpc.GPUExecutionServiceBlockingStub executionStub;
 
     @BeforeEach
     void setUp() {
@@ -71,8 +70,7 @@ class GpuExecutionIntegrationTest {
         channel = ManagedChannelBuilder.forAddress("localhost", grpcPort)
                 .usePlaintext()
                 .build();
-        executionStub = GpuExecutionServiceGrpc.newBlockingStub(channel);
-        capacityStub = GpuCapacityServiceGrpc.newBlockingStub(channel);
+        executionStub = GPUExecutionServiceGrpc.newBlockingStub(channel);
     }
 
     @AfterEach
@@ -92,7 +90,7 @@ class GpuExecutionIntegrationTest {
         assertThat(response.getRequestId()).isEqualTo(requestId);
         assertThat(response.getExecutionId()).isNotBlank();
         // StubRuntime returns RUNTIME_UNAVAILABLE → FAILED
-        assertThat(response.getState()).isIn(ExecutionState.FAILED, ExecutionState.SUCCEEDED);
+        assertThat(response.getState()).isIn(ExecutionState.FAILED, ExecutionState.SUCCESS);
 
         // Verify the execution was persisted in PostgreSQL
         assertThat(executionRepository.findByExecutionId(response.getExecutionId())).isPresent();
@@ -112,7 +110,7 @@ class GpuExecutionIntegrationTest {
 
     @Test
     void shouldReturnNotFoundForUnknownExecutionId() {
-        StatusRequest statusRequest = StatusRequest.newBuilder()
+        GetStatusRequest statusRequest = GetStatusRequest.newBuilder()
                 .setExecutionId("nonexistent-exec-id")
                 .build();
 
@@ -123,22 +121,22 @@ class GpuExecutionIntegrationTest {
 
     @Test
     void shouldReturnAdvisoryCapacityForKnownModel() {
-        CapacityRequest request = CapacityRequest.newBuilder()
-                .setModelId("test-model")
+        GetCapacityRequest request = GetCapacityRequest.newBuilder()
+                .setModel("test-model")
                 .build();
 
-        CapacityResponse response = capacityStub.getCapacity(request);
+        CapacityResponse response = executionStub.getCapacity(request);
 
-        assertThat(response.getModelId()).isEqualTo("test-model");
-        assertThat(response.getRuntimeClass()).isEqualTo("vllm-test");
+        assertThat(response.getModel()).isEqualTo("test-model");
     }
 
     @Test
     void shouldRejectExecutionForMissingRequestId() {
         ExecutionRequest request = ExecutionRequest.newBuilder()
                 .setTenantId("tenant")
-                .setModelId("test-model")
-                .setOptions(ExecutionOptions.newBuilder().setOperation(Operation.SYNTHESIZE).build())
+                .setModel("test-model")
+                .setModelVersion("1.0")
+                .setOperation(Operation.SYNTHESIZE)
                 .build();
 
         assertThatThrownBy(() -> executionStub.execute(request))
@@ -150,11 +148,9 @@ class GpuExecutionIntegrationTest {
         return ExecutionRequest.newBuilder()
                 .setRequestId(requestId)
                 .setTenantId("integration-tenant")
-                .setModelId(modelId)
-                .setOptions(ExecutionOptions.newBuilder()
-                        .setOperation(Operation.SYNTHESIZE)
-                        .setMaxTokens(256)
-                        .build())
+                .setModel(modelId)
+                .setModelVersion("1.0")
+                .setOperation(Operation.SYNTHESIZE)
                 .setPayload(ByteString.copyFromUtf8("{\"messages\":[{\"role\":\"user\",\"content\":\"hello\"}]}"))
                 .build();
     }

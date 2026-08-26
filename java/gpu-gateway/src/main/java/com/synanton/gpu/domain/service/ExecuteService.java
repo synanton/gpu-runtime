@@ -3,7 +3,7 @@ package com.synanton.gpu.domain.service;
 import com.synanton.gpu.domain.model.*;
 import com.synanton.gpu.domain.port.in.ExecuteUseCase;
 import com.synanton.gpu.domain.port.out.*;
-import com.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionRequest;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -70,35 +70,35 @@ public class ExecuteService implements ExecuteUseCase {
 
         // Ensure model is ready (may block; transitions to MODEL_LOADING if loading required)
         try {
-            ModelStatus status = modelManager.getStatus(request.getModelId());
+            ModelStatus status = modelManager.getStatus(request.getModel());
             if (status != ModelStatus.READY) {
                 executionRepository.transitionState(
                         executionId, ExecutionState.QUEUED, ExecutionState.MODEL_LOADING);
-                log.info("Model loading: execution_id={} model={}", executionId, request.getModelId());
-                modelManager.ensureReady(request.getModelId());
+                log.info("Model loading: execution_id={} model={}", executionId, request.getModel());
+                modelManager.ensureReady(request.getModel());
                 // MODEL_LOADING → QUEUED: ready to be dispatched
                 executionRepository.transitionState(
                         executionId, ExecutionState.MODEL_LOADING, ExecutionState.QUEUED);
             }
         } catch (ModelManager.ModelLoadException e) {
-            log.error("Model load failed: model={} execution_id={}", request.getModelId(), executionId, e);
+            log.error("Model load failed: model={} execution_id={}", request.getModel(), executionId, e);
             ExecutionError loadError = ExecutionError.nonRetryable(
                     "MODEL_LOAD_FAILED", e.getMessage());
             executionRepository.completeFailure(
                     executionId, ExecutionState.MODEL_LOADING, ExecutionState.FAILED, loadError);
             int cascaded = executionRepository.failAllQueuedForModel(
-                    request.getModelId(), loadError);
+                    request.getModel(), loadError);
             log.warn("Cascaded model load failure to {} queued executions for model={}",
-                    cascaded, request.getModelId());
+                    cascaded, request.getModel());
             return executionRepository.findByExecutionId(executionId)
                     .orElseThrow(() -> new IllegalStateException(
                             "Execution not found after model load failure: " + executionId));
         }
 
         // QUEUED → RUNNING: schedule target and start heartbeat
-        ModelCapabilities capabilities = modelRepository.getCapabilities(request.getModelId())
+        ModelCapabilities capabilities = modelRepository.getCapabilities(request.getModel())
                 .orElseThrow(() -> new IllegalStateException(
-                        "Model capabilities disappeared after admission: " + request.getModelId()));
+                        "Model capabilities disappeared after admission: " + request.getModel()));
         RuntimeTarget target = executionScheduler.schedule(request, capabilities);
         executionRepository.transitionState(executionId, ExecutionState.QUEUED, ExecutionState.RUNNING);
         log.info("Dispatching execution_id={} target={}", executionId, target.endpointUrl());

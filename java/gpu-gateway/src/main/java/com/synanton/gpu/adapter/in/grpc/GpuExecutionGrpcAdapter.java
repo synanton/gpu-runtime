@@ -1,39 +1,48 @@
 package com.synanton.gpu.adapter.in.grpc;
 
 import com.synanton.gpu.domain.model.Execution;
-import com.synanton.gpu.domain.port.in.*;
+import com.synanton.gpu.domain.port.in.CancelUseCase;
+import com.synanton.gpu.domain.port.in.ExecuteUseCase;
+import com.synanton.gpu.domain.port.in.GetCapacityUseCase;
+import com.synanton.gpu.domain.port.in.GetStatusUseCase;
 import com.synanton.gpu.domain.service.AdmissionService.AdmissionException;
 import com.synanton.gpu.domain.service.IdempotencyService.RequestIdReuseException;
-import com.synanton.gpu.v1.*;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Component;
+import org.synanton.gpu.v1.CancelRequest;
+import org.synanton.gpu.v1.CancelResponse;
+import org.synanton.gpu.v1.CancellationOutcome;
+import org.synanton.gpu.v1.CapacityResponse;
+import org.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionResponse;
+import org.synanton.gpu.v1.ExecutionStatus;
+import org.synanton.gpu.v1.GPUExecutionServiceGrpc;
+import org.synanton.gpu.v1.GetCapacityRequest;
+import org.synanton.gpu.v1.GetStatusRequest;
 
 import java.util.Optional;
 
 /**
- * gRPC inbound adapter implementing the {@code synanton.gpu.v1.GpuExecutionService} contract.
- *
- * <p>This adapter delegates entirely to use-case interfaces; it contains NO business logic.
- * Proto ↔ domain mapping is handled by {@link ResponseMapper}.
- * Privacy rule: request payload, tenant assertions, and token contents are never logged.
+ * gRPC inbound adapter implementing {@code synanton.gpu.v1.GPUExecutionService}.
  */
 @Component
 @Slf4j
 @RequiredArgsConstructor
-public class GpuExecutionGrpcAdapter extends GpuExecutionServiceGrpc.GpuExecutionServiceImplBase {
+public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutionServiceImplBase {
 
     private final ExecuteUseCase executeUseCase;
     private final CancelUseCase cancelUseCase;
     private final GetStatusUseCase getStatusUseCase;
+    private final GetCapacityUseCase getCapacityUseCase;
     private final ResponseMapper responseMapper;
 
     @Override
     public void execute(ExecutionRequest request, StreamObserver<ExecutionResponse> observer) {
         log.info("Execute: request_id={} model={} tenant={}",
-                request.getRequestId(), request.getModelId(), request.getTenantId());
+                request.getRequestId(), request.getModel(), request.getTenantId());
         try {
             Execution execution = executeUseCase.execute(request);
             observer.onNext(responseMapper.toExecutionResponse(execution));
@@ -45,11 +54,11 @@ public class GpuExecutionGrpcAdapter extends GpuExecutionServiceGrpc.GpuExecutio
                     .asRuntimeException());
         } catch (AdmissionException e) {
             Status grpcStatus = switch (e.getRejection()) {
-                case INVALID_ARGUMENT  -> Status.INVALID_ARGUMENT.withDescription(e.getMessage());
-                case MODEL_NOT_FOUND   -> Status.NOT_FOUND.withDescription(e.getMessage());
+                case INVALID_ARGUMENT -> Status.INVALID_ARGUMENT.withDescription(e.getMessage());
+                case MODEL_NOT_FOUND -> Status.NOT_FOUND.withDescription(e.getMessage());
                 case CONCURRENCY_LIMIT,
-                     CAPACITY_EXCEEDED -> Status.RESOURCE_EXHAUSTED.withDescription(e.getMessage());
-                case GPU_QUOTA_EXCEEDED -> Status.RESOURCE_EXHAUSTED.withDescription(e.getMessage());
+                     CAPACITY_EXCEEDED,
+                     GPU_QUOTA_EXCEEDED -> Status.RESOURCE_EXHAUSTED.withDescription(e.getMessage());
             };
             log.warn("Admission rejected: {} request_id={}", e.getRejection(), request.getRequestId());
             observer.onError(grpcStatus.asRuntimeException());
@@ -73,8 +82,8 @@ public class GpuExecutionGrpcAdapter extends GpuExecutionServiceGrpc.GpuExecutio
             Optional<Execution> result = cancelUseCase.cancel(request.getExecutionId());
             CancellationOutcome outcome = result
                     .map(exec -> exec.state().isTerminal()
-                            ? CancellationOutcome.ALREADY_COMPLETED
-                            : CancellationOutcome.CANCEL_ACCEPTED)
+                            ? CancellationOutcome.COMPLETED
+                            : CancellationOutcome.ACCEPTED)
                     .orElse(CancellationOutcome.NOT_APPLICABLE);
 
             observer.onNext(CancelResponse.newBuilder()
@@ -89,7 +98,7 @@ public class GpuExecutionGrpcAdapter extends GpuExecutionServiceGrpc.GpuExecutio
     }
 
     @Override
-    public void getStatus(StatusRequest request, StreamObserver<StatusResponse> observer) {
+    public void getStatus(GetStatusRequest request, StreamObserver<ExecutionStatus> observer) {
         if (request.getExecutionId().isBlank()) {
             observer.onError(Status.INVALID_ARGUMENT
                     .withDescription("execution_id is required").asRuntimeException());
@@ -108,6 +117,37 @@ public class GpuExecutionGrpcAdapter extends GpuExecutionServiceGrpc.GpuExecutio
             observer.onCompleted();
         } catch (Exception e) {
             log.error("Unexpected error in GetStatus: execution_id={}", request.getExecutionId(), e);
+            observer.onError(Status.INTERNAL.withDescription("Internal error").asRuntimeException());
+        }
+    }
+
+    @Override
+    public void getCapacity(GetCapacityRequest request, StreamObserver<CapacityResponse> observer) {
+        log.debug("GetCapacity: model={}", request.getModel());
+        try {
+            getCapacityUseCase.getCapacity(request.getModel())
+                    .ifPresentOrElse(
+                            info -> {
+                                int available = Math.max(0,
+                                        info.capabilities().concurrencyLimit() - info.activeExecutions());
+                                double fraction = info.capabilities().concurrencyLimit() > 0
+                                        ? (double) available / info.capabilities().concurrencyLimit()
+                                        : 0.0;
+                                observer.onNext(CapacityResponse.newBuilder()
+                                        .setModel(request.getModel())
+                                        .setModelLoaded(info.modelLoaded())
+                                        .setEstimatedQueueDepth(info.activeExecutions())
+                                        .setEstimatedAvailableFraction(fraction)
+                                        .setHealthy(info.healthy())
+                                        .build());
+                                observer.onCompleted();
+                            },
+                            () -> observer.onError(Status.NOT_FOUND
+                                    .withDescription("Model not found: " + request.getModel())
+                                    .asRuntimeException())
+                    );
+        } catch (Exception e) {
+            log.error("Unexpected error in GetCapacity: model={}", request.getModel(), e);
             observer.onError(Status.INTERNAL.withDescription("Internal error").asRuntimeException());
         }
     }

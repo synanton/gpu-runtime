@@ -1,7 +1,7 @@
 package com.synanton.gpu.integration;
 
 import com.google.protobuf.ByteString;
-import com.synanton.gpu.v1.*;
+import org.synanton.gpu.v1.*;
 import io.grpc.ManagedChannel;
 import io.grpc.ManagedChannelBuilder;
 import io.grpc.StatusRuntimeException;
@@ -63,7 +63,7 @@ class ConcurrencyAdmissionTest {
     private com.synanton.gpu.config.GrpcServerLifecycle grpcServerLifecycle;
 
     private ManagedChannel channel;
-    private GpuExecutionServiceGrpc.GpuExecutionServiceBlockingStub stub;
+    private GPUExecutionServiceGrpc.GPUExecutionServiceBlockingStub stub;
 
     @BeforeEach
     void setUp() {
@@ -71,7 +71,7 @@ class ConcurrencyAdmissionTest {
         channel = ManagedChannelBuilder.forAddress("localhost", grpcPort)
                 .usePlaintext()
                 .build();
-        stub = GpuExecutionServiceGrpc.newBlockingStub(channel);
+        stub = GPUExecutionServiceGrpc.newBlockingStub(channel);
     }
 
     @AfterEach
@@ -97,10 +97,9 @@ class ConcurrencyAdmissionTest {
                     ExecutionRequest request = ExecutionRequest.newBuilder()
                             .setRequestId(requestId)
                             .setTenantId("concurrency-tenant")
-                            .setModelId("limited-model")
-                            .setOptions(ExecutionOptions.newBuilder()
-                                    .setOperation(Operation.SYNTHESIZE)
-                                    .build())
+                            .setModel("limited-model")
+                            .setModelVersion("1.0")
+                            .setOperation(Operation.SYNTHESIZE)
                             .setPayload(ByteString.copyFromUtf8("{}"))
                             .build();
                     stub.execute(request);

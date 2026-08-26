@@ -4,7 +4,7 @@ import com.synanton.gpu.domain.model.ExecutionError;
 import com.synanton.gpu.domain.model.RetryDisposition;
 import com.synanton.gpu.domain.model.RuntimeTarget;
 import com.synanton.gpu.domain.port.out.ExecutionRuntime;
-import com.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionRequest;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 

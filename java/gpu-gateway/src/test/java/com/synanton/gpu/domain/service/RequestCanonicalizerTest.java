@@ -1,7 +1,7 @@
 package com.synanton.gpu.domain.service;
 
 import com.google.protobuf.ByteString;
-import com.synanton.gpu.v1.*;
+import org.synanton.gpu.v1.*;
 import org.junit.jupiter.api.Test;
 
 import static org.assertj.core.api.Assertions.assertThat;
@@ -63,11 +63,9 @@ class RequestCanonicalizerTest {
         return ExecutionRequest.newBuilder()
                 .setRequestId(requestId)
                 .setTenantId(tenantId)
-                .setModelId(modelId)
-                .setOptions(ExecutionOptions.newBuilder()
-                        .setOperation(Operation.SYNTHESIZE)
-                        .setMaxTokens(512)
-                        .build())
+                .setModel(modelId)
+                .setModelVersion("1.0")
+                .setOperation(Operation.SYNTHESIZE)
                 .setPayload(ByteString.copyFromUtf8(payload))
                 .build();
     }

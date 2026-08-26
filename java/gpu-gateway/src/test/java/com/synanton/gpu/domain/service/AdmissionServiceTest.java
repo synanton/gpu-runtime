@@ -6,7 +6,7 @@ import com.synanton.gpu.domain.port.out.ExecutionRepository;
 import com.synanton.gpu.domain.port.out.ModelRepository;
 import com.synanton.gpu.domain.service.AdmissionService.AdmissionException;
 import com.synanton.gpu.domain.service.AdmissionService.AdmissionRejection;
-import com.synanton.gpu.v1.*;
+import org.synanton.gpu.v1.*;
 import org.junit.jupiter.api.Test;
 import org.junit.jupiter.api.extension.ExtendWith;
 import org.mockito.InjectMocks;
@@ -65,11 +65,16 @@ class AdmissionServiceTest {
     }
 
     @Test
-    void shouldRejectWhenTokenLimitExceeded() {
-        ModelCapabilities capabilities = new ModelCapabilities("model-a", 8, 4096, "vllm");
-        when(modelRepository.getCapabilities("model-a")).thenReturn(Optional.of(capabilities));
+    void shouldRejectWhenModelVersionMissing() {
+        ExecutionRequest request = ExecutionRequest.newBuilder()
+                .setRequestId("req-test-1")
+                .setTenantId("tenant-abc")
+                .setModel("model-a")
+                .setOperation(Operation.SYNTHESIZE)
+                .setPayload(ByteString.copyFromUtf8("{}"))
+                .build();
 
-        assertThatThrownBy(() -> admissionService.admit(buildRequest("model-a", 9999)))
+        assertThatThrownBy(() -> admissionService.admit(request))
                 .isInstanceOf(AdmissionException.class)
                 .extracting(e -> ((AdmissionException) e).getRejection())
                 .isEqualTo(AdmissionRejection.INVALID_ARGUMENT);
@@ -79,8 +84,9 @@ class AdmissionServiceTest {
     void shouldRejectWhenRequestIdMissing() {
         ExecutionRequest request = ExecutionRequest.newBuilder()
                 .setTenantId("tenant")
-                .setModelId("model-a")
-                .setOptions(ExecutionOptions.newBuilder().setOperation(Operation.SYNTHESIZE).build())
+                .setModel("model-a")
+                .setModelVersion("1.0")
+                .setOperation(Operation.SYNTHESIZE)
                 .build();
 
         assertThatThrownBy(() -> admissionService.admit(request))
@@ -89,15 +95,13 @@ class AdmissionServiceTest {
                 .isEqualTo(AdmissionRejection.INVALID_ARGUMENT);
     }
 
-    private ExecutionRequest buildRequest(String modelId, int maxTokens) {
+    private ExecutionRequest buildRequest(String modelId, int ignoredMaxTokens) {
         return ExecutionRequest.newBuilder()
                 .setRequestId("req-test-1")
                 .setTenantId("tenant-abc")
-                .setModelId(modelId)
-                .setOptions(ExecutionOptions.newBuilder()
-                        .setOperation(Operation.SYNTHESIZE)
-                        .setMaxTokens(maxTokens)
-                        .build())
+                .setModel(modelId)
+                .setModelVersion("1.0")
+                .setOperation(Operation.SYNTHESIZE)
                 .setPayload(ByteString.copyFromUtf8("{}"))
                 .build();
     }

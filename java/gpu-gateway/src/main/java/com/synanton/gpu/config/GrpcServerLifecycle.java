@@ -1,6 +1,5 @@
 package com.synanton.gpu.config;
 
-import com.synanton.gpu.adapter.in.grpc.GpuCapacityGrpcAdapter;
 import com.synanton.gpu.adapter.in.grpc.GpuExecutionGrpcAdapter;
 import io.grpc.Server;
 import io.grpc.netty.shaded.io.grpc.netty.NettyServerBuilder;
@@ -20,14 +19,11 @@ public class GrpcServerLifecycle implements SmartLifecycle {
 
     private final GpuGatewayProperties properties;
     private final GpuExecutionGrpcAdapter executionAdapter;
-    private final GpuCapacityGrpcAdapter capacityAdapter;
 
     public GrpcServerLifecycle(GpuGatewayProperties properties,
-                                GpuExecutionGrpcAdapter executionAdapter,
-                                GpuCapacityGrpcAdapter capacityAdapter) {
+                                GpuExecutionGrpcAdapter executionAdapter) {
         this.properties = properties;
         this.executionAdapter = executionAdapter;
-        this.capacityAdapter = capacityAdapter;
     }
 
     @Override
@@ -37,7 +33,6 @@ public class GrpcServerLifecycle implements SmartLifecycle {
                     .forPort(properties.getGrpcPort())
                     .maxInboundMessageSize(properties.getMaxInboundMessageSizeBytes())
                     .addService(executionAdapter)
-                    .addService(capacityAdapter)
                     .build()
                     .start();
             log.info("gRPC server started on port {}", server.getPort());

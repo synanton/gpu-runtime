@@ -4,7 +4,7 @@ import com.synanton.gpu.domain.model.ExecutionError;
 import com.synanton.gpu.domain.model.ExecutionUsage;
 import com.synanton.gpu.domain.model.RetryDisposition;
 import com.synanton.gpu.domain.model.RuntimeTarget;
-import com.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionRequest;
 
 /**
  * Outbound port for communicating with the GPU runtime (vLLM).

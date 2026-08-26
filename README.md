@@ -28,7 +28,7 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 - **vLLM Integration**: Abstracts vLLM (and future runtimes like TGI) behind a clean `ExecutionRuntime` interface with robust retry safety (`RetryDisposition`).
 - **Logical Capacity API**: Exposes only logical model concurrency (`available_concurrency`) to the Main Platform, never physical GPU topology.
 - **Shared Model Artifact Cache**: Downloads models once from the internal registry, verifies integrity via SHA-256 digests, and shares them read-only across all vLLM replicas.
-- **Cost Attribution**: Reports `input_tokens`, `output_tokens`, and `gpu_duration_seconds` back to the Main Platform for tenant chargeback, without exposing infrastructure details.
+- **Cost Attribution**: Reports `input_tokens`, `output_tokens`, and duration back to the Main Platform (`UsageReport` on `synanton.gpu.v1`) for tenant chargeback, without exposing infrastructure details.
 - **Lazy Reconciliation**: Handles runtime failures deterministically via `GetStatus()` calls—no complex background controllers required in v1.20.
 
 ---
@@ -203,7 +203,7 @@ gpu-runtime/
 │       └── monitoring/
 │       └── src/main/java/com/synanton/gpu/
 │           ├── adapter/
-│           │   ├── in/grpc/             # GpuExecutionGrpcAdapter, GpuCapacityGrpcAdapter
+│           │   ├── in/grpc/             # GpuExecutionGrpcAdapter (Execute/Cancel/GetStatus/GetCapacity)
 │           │   └── out/                 # [GPU-3] database/, runtime/, registry/, schedule/, model/
 │           ├── domain/
 │           │   ├── model/               # Execution, ExecutionState, ModelCapabilities, …
@@ -230,8 +230,8 @@ gpu-runtime/
 | **GPU-1** | Contract & Deterministic Semantics | Protobuf definitions, error taxonomy, PGV validation, request canonicalization, idempotency contract | ✅ Complete         |
 | **GPU-2** | Domain Core & Persistence          | Use cases, AdmissionService, PostgreSQL schema (Flyway), advisory-lock admission, concurrency tests  | ✅ Complete         |
 | **GPU-3** | Runtime & Model Lifecycle          | Outbound port interfaces, JdbcExecutionRepository, VllmRuntime, ModelManager, ArtifactResolver, heartbeat, lazy reconciliation | ✅ Complete     |
-| **GPU-4** | Main Platform Integration          | `GpuExecutionClient` in Synanton Core, W3C tracing, long-polling, CPU fallback in Core              | ⬜ Not Started      |
-| **GPU-5** | Production Hardening               | HA PostgreSQL (CloudNativePG), Helm charts, NetworkPolicy, fault injection, load tests, Grafana      | ⬜ Not Started      |
+| **GPU-4** | Main Platform Integration          | `synanton.gpu.v1` is byte-identical with platform (`org.synanton.gpu.v1`, `GetStatusRequest`, `ErrorReason`). Mirror: `./scripts/verify-gpu-contract-mirror.sh`. Platform ingest embeddings still use HTTP `HttpLlmClient` until the gateway GPU client is enabled. | 🔶 Contract unified; routing still optional |
+| **GPU-5** | Production Hardening               | Helm / `deploy/` / mTLS manifests are **not** in this repository yet despite older README trees. | ⬜ Not Started      |
 | **GPU-6** | Equalix Evaluation                 | Measure queue fairness and utilization; implement `EqualixScheduler` only if data justifies it       | ⬜ Future           |
 
 ### GPU-3 Checklist
@@ -266,6 +266,25 @@ gpu-runtime/
 - [x] `DefaultModelManager` implementation
 - [x] `MODEL_LOADING` execution state explicitly tracked
 - [x] Load failures cascade to QUEUED executions (`failAllQueuedForModel`)
+
+## Contract mirroring
+
+`java/gpu-contract` is a **byte-identical** copy of `platform/java/gpu-contract`:
+
+- protobuf package `synanton.gpu.v1`
+- Java package `org.synanton.gpu.v1`
+- service `GPUExecutionService` (`Execute`, `Cancel`, `GetStatus`, `GetCapacity`)
+- `GetStatusRequest` / `ExecutionStatus`
+- `ErrorReason` catalogue (`ErrorInfo`)
+
+```bash
+./scripts/verify-gpu-contract-mirror.sh
+GPU_PEER_REPO=/path/to/platform ./scripts/verify-gpu-contract-mirror.sh
+```
+
+Wired into `./gradlew check`. Internal domain states (`ACCEPTED`, `MODEL_LOADING`, `SUCCEEDED`) still exist in PostgreSQL; the gRPC mapper emits the platform wire enum (`QUEUED`, `RUNNING`, `SUCCESS`, …).
+
+---
 
 ## Getting Started (Development)
 #### Reconciliation
@@ -325,7 +344,7 @@ cd gpu-runtime
 # ConcurrencyAdmissionTest, then run with DOCKER_HOST set to your daemon socket:
 DOCKER_HOST=unix:///path/to/docker.sock ./gradlew :java:gpu-gateway:test
 
-# Full build + check
+# Full build + check (includes GPU proto mirror vs sibling platform/)
 ./gradlew check
 ```
 
@@ -367,6 +386,7 @@ Apache 2.0 License – see [LICENSE](LICENSE).
 
 ## References
 
-- [Synanton Design v1.20 (GPU Execution Plane)](https://github.com/Synanton/platform/blob/main/docs/architecture/Synanton-design-1.20.md)
-- [Synanton Design v1.19](https://github.com/Synanton/platform/blob/main/docs/architecture/Synanton-design-1.19.md)
+- [Synanton Design v1.21 (current)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.21.md)
+- [Synanton Design v1.20 (GPU Part VIII)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.20.md)
+- [Synanton Design v1.19 (baseline)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.19.md)
 - [Synanton Core README](https://github.com/Synanton/platform/blob/main/README.md)

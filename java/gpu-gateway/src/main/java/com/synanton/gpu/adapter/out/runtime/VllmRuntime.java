@@ -8,8 +8,8 @@ import com.synanton.gpu.domain.model.RetryDisposition;
 import com.synanton.gpu.domain.model.RuntimeTarget;
 import com.synanton.gpu.domain.port.out.ExecutionRuntime;
 import com.synanton.gpu.domain.service.HeartbeatManager;
-import com.synanton.gpu.v1.ExecutionRequest;
-import com.synanton.gpu.v1.Operation;
+import org.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.Operation;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -66,10 +66,10 @@ public class VllmRuntime implements ExecutionRuntime {
 
     @Override
     public RuntimeResult execute(ExecutionRequest request, RuntimeTarget target) {
-        String endpoint = resolveEndpoint(target.endpointUrl(), request.getOptions().getOperation());
+        String endpoint = resolveEndpoint(target.endpointUrl(), request.getOperation());
         String executionId = request.getRequestId(); // used for heartbeat key; overridden at call site
 
-        log.info("vLLM dispatch: operation={} endpoint={}", request.getOptions().getOperation(), endpoint);
+        log.info("vLLM dispatch: operation={} endpoint={}", request.getOperation(), endpoint);
 
         HeartbeatManager.HeartbeatHandle heartbeat = heartbeatManager.start(executionId);
         long startMs = System.currentTimeMillis();

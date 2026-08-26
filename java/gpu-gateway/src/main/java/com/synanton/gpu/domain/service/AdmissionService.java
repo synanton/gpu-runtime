@@ -3,8 +3,7 @@ package com.synanton.gpu.domain.service;
 import com.synanton.gpu.domain.model.ModelCapabilities;
 import com.synanton.gpu.domain.port.out.ExecutionRepository;
 import com.synanton.gpu.domain.port.out.ModelRepository;
-import com.synanton.gpu.v1.ExecutionOptions;
-import com.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionRequest;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
@@ -33,13 +32,12 @@ public class AdmissionService {
     public ModelCapabilities admit(ExecutionRequest request) {
         validateFields(request);
 
-        ModelCapabilities capabilities = modelRepository.getCapabilities(request.getModelId())
+        ModelCapabilities capabilities = modelRepository.getCapabilities(request.getModel())
                 .orElseThrow(() -> new AdmissionException(
                         AdmissionRejection.MODEL_NOT_FOUND,
-                        "Model not found: " + request.getModelId()));
+                        "Model not found: " + request.getModel()));
 
-        validateTokenLimit(request.getOptions(), capabilities);
-        checkConcurrencyLimit(request.getModelId(), capabilities);
+        checkConcurrencyLimit(request.getModel(), capabilities);
 
         return capabilities;
     }
@@ -51,19 +49,15 @@ public class AdmissionService {
         if (request.getTenantId().isBlank()) {
             throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT, "tenant_id is required");
         }
-        if (request.getModelId().isBlank()) {
-            throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT, "model_id is required");
+        if (request.getModel().isBlank()) {
+            throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT, "model is required");
         }
-        if (request.getOptions().getOperation().getNumber() == 0) {
+        if (request.getModelVersion().isBlank()) {
+            throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT, "model_version is required");
+        }
+        if (request.getOperation().getNumber() == 0) {
             throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT,
                     "operation must not be OPERATION_UNSPECIFIED");
-        }
-    }
-
-    private void validateTokenLimit(ExecutionOptions options, ModelCapabilities capabilities) {
-        if (options.getMaxTokens() > 0 && options.getMaxTokens() > capabilities.maxInputTokens()) {
-            throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT,
-                    "max_tokens " + options.getMaxTokens() + " exceeds model limit " + capabilities.maxInputTokens());
         }
     }
 
