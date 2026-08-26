@@ -327,24 +327,32 @@ These are enforced by the architecture and encoded into `.cursor/rules/gpu-execu
 ```bash
 # Compile all modules
 ./gradlew compileJava
-
 ```
-# Clone the repository
+
+### Clone the repository
+```bash
 git clone https://github.com/synanton/gpu-runtime.git
 cd gpu-runtime
+```
 
-# Build the contract module
+### Build the contract module
+```bash
 ./gradlew :java:gpu-contract:build
+```
 
-# Run unit tests (no infrastructure required)
+### Run unit tests (no infrastructure required)
+```bash
 ./gradlew :java:gpu-gateway:test
+```
 
-# Run integration tests (Testcontainers PostgreSQL — requires Docker)
-# Remove @Disabled from JdbcExecutionRepositoryTest, GpuExecutionIntegrationTest,
-# ConcurrencyAdmissionTest, then run with DOCKER_HOST set to your daemon socket:
+### Run integration tests (Testcontainers PostgreSQL — requires Docker)
+Remove @Disabled from JdbcExecutionRepositoryTest, GpuExecutionIntegrationTest,ConcurrencyAdmissionTest, then run with DOCKER_HOST set to your daemon socket:
+```bash
 DOCKER_HOST=unix:///path/to/docker.sock ./gradlew :java:gpu-gateway:test
+```
 
-# Full build + check (includes GPU proto mirror vs sibling platform/)
+### Full build + check (includes GPU proto mirror vs sibling platform/)
+```bash
 ./gradlew check
 ```
 
