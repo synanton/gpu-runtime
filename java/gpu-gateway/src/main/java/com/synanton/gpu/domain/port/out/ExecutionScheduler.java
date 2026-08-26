@@ -2,7 +2,7 @@ package com.synanton.gpu.domain.port.out;
 
 import com.synanton.gpu.domain.model.ModelCapabilities;
 import com.synanton.gpu.domain.model.RuntimeTarget;
-import com.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.ExecutionRequest;
 
 /**
  * Outbound port for selecting a runtime target for an execution.
