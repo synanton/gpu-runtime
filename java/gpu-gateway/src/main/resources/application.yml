@@ -60,5 +60,5 @@ management:
 
 logging:
   level:
-    com.synanton.gpu: INFO
+    org.synanton.gpu: INFO
     io.grpc: WARN

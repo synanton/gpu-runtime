@@ -11,7 +11,7 @@ These rules are non-negotiable. Violating any of them breaks the system contract
 ## 1. Domain isolation
 
 **Domain MUST NOT depend on:** Kubernetes, vLLM, protobuf classes, PostgreSQL/JDBC, Spring adapters,
-infrastructure clients, or any class outside the `com.synanton.gpu.domain` package tree.
+infrastructure clients, or any class outside the `org.synanton.gpu.domain` package tree.
 
 Domain interfaces (`ExecutionRepository`, `ExecutionRuntime`, `ArtifactResolver`, `ModelRepository`,
 `ExecutionScheduler`) are the only boundary the domain may cross.

@@ -29,4 +29,4 @@ spring:
 
 logging:
   level:
-    com.synanton.gpu: DEBUG
+    org.synanton.gpu: DEBUG

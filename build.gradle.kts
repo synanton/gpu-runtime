@@ -3,7 +3,7 @@ plugins {
 }
 
 allprojects {
-    group = "com.synanton"
+    group = "org.synanton"
     version = "0.1.0-SNAPSHOT"
 }
 

@@ -227,7 +227,7 @@ gpu:
 
 logging:
   level:
-    com.synanton.gpu: DEBUG
+    org.synanton.gpu: DEBUG
     root: INFO
 ```
 
