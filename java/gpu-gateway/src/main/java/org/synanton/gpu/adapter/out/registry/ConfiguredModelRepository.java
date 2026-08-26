@@ -3,7 +3,6 @@ package org.synanton.gpu.adapter.out.registry;
 import org.synanton.gpu.config.GpuGatewayProperties;
 import org.synanton.gpu.domain.model.ModelCapabilities;
 import org.synanton.gpu.domain.port.out.ModelRepository;
-import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
 import java.util.Map;
