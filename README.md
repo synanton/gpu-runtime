@@ -224,15 +224,23 @@ gpu-runtime/
 
 ------
 
-## Implementation Roadmap
+## Roadmap
 
----------|------------------------------------|------------------------------------------------------------------------------------------------------|--------------------|
-| **GPU-1** | Contract & Deterministic Semantics | Protobuf definitions, error taxonomy, PGV validation, request canonicalization, idempotency contract | ✅ Complete         |
-| **GPU-2** | Domain Core & Persistence          | Use cases, AdmissionService, PostgreSQL schema (Flyway), advisory-lock admission, concurrency tests  | ✅ Complete         |
-| **GPU-3** | Runtime & Model Lifecycle          | Outbound port interfaces, JdbcExecutionRepository, VllmRuntime, ModelManager, ArtifactResolver, heartbeat, lazy reconciliation | ✅ Complete     |
-| **GPU-4** | Main Platform Integration          | `synanton.gpu.v1` is byte-identical with platform (`org.synanton.gpu.v1`, `GetStatusRequest`, `ErrorReason`). Mirror: `./scripts/verify-gpu-contract-mirror.sh`. Platform ingest embeddings still use HTTP `HttpLlmClient` until the gateway GPU client is enabled. | 🔶 Contract unified; routing still optional |
-| **GPU-5** | Production Hardening               | Helm / `deploy/` / mTLS manifests are **not** in this repository yet despite older README trees. | ⬜ Not Started      |
-| **GPU-6** | Equalix Evaluation                 | Measure queue fairness and utilization; implement `EqualixScheduler` only if data justifies it       | ⬜ Future           |
+| Milestone | Purpose | Status |
+|---|---|---|
+| GPU-1 | Contract & deterministic semantics | Complete |
+| GPU-2 | Domain core & persistence | Complete |
+| GPU-3 | Runtime & model lifecycle | Complete |
+| GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
+| **GPU-5** | **Four-node homelab deployment + real embedding/reranking benchmark path** | **Planned** |
+| **GPU-6** | **Production deployment and operational hardening** | **Future** |
+
+GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introducing production-scale scheduling complexity.
+
+## Related Synanton projects
+
+- [Synanton Platform](https://github.com/synanton/platform)
+- [Content Extractor](https://github.com/synanton/content_extractor)
 
 ### GPU-3 Checklist
 
