@@ -1,6 +1,6 @@
 # GPU-5 — Kubernetes Reference Deployment Plan
 
-**Status:** Ticket backlog — not started. No Helm charts, manifests, or Dockerfile exist yet; this document breaks GPU-5 ("Production Hardening" in the README's roadmap table) into ticket-sized items.
+**Status:** Ticket backlog — not started. No Helm charts, manifests, or Dockerfile exist yet; this document breaks GPU-5 ("Kubernetes Reference Deployment" in the README's roadmap table) into ticket-sized items. 
 
 **Context:** GPU-1 through GPU-3 are complete. GPU-4 (Main Platform Integration) has the `synanton.gpu.v1` contract unified and mirrored with `platform`, but routing is still optional. GPU-5 is a confirmed blank slate — `helm/`, `deploy/`, and `Dockerfile` do not exist anywhere in this repo, despite the README's own "Repository Structure" tree describing them. That tree is aspirational/stale (verified directly against the filesystem): it also shows conflicting package names (`com.Synanton.gpu` / `com.synanton.gpu` vs. the real `org.synanton.gpu`) and references files that don't exist (`scripts/deploy-onprem.sh`, `scripts/smoke-test.sh`). Treat this document, not that tree, as the source of truth for what GPU-5 actually requires.
 
