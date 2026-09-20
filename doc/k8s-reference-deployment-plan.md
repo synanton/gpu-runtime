@@ -14,8 +14,8 @@
 | `node3` | worker | 20 | 64Gi | RTX 5060 Ti, 16GB |
 
 **Reference sources for every ticket below:**
-- Cluster bootstrap shape: `andreminin/s2s-lab-k8s/doc/cluster-as-built.md` (Calico CNI, NVIDIA GPU Operator, local registry, Longhorn/`local-ssd`).
-- Workload manifest shape: `andreminin/speech-to-speech-k8s/k8s/` (real, currently-running GPU Deployments on this exact hardware) and `docs/deployment.md` (the actual `kubectl apply` sequence and gotchas hit deploying to it).
+- Cluster bootstrap shape: `cluster-as-built.md` (Calico CNI, NVIDIA GPU Operator, local registry, Longhorn/`local-ssd`).
+- Workload manifest shape: `https://github.com/andreminin/speech-to-speech-k8s/k8s/` (real, currently-running GPU Deployments on this exact hardware) and `docs/deployment.md` (the actual `kubectl apply` sequence and gotchas hit deploying to it).
 
 ---
 
@@ -37,7 +37,7 @@ Reproduce the proven shape rather than redesigning it:
 
 No coexistence with a `speech` namespace this time — pick a namespace name (suggest `gpu-runtime`) and set it up fresh.
 
-Reuse `speech-to-speech-k8s/scripts/create-registry-secret.sh`'s exact pattern — it's already namespace-parameterized:
+Reuse `https://github.com/andreminin/speech-to-speech-k8s/scripts/create-registry-secret.sh`'s exact pattern — it's already namespace-parameterized:
 ```bash
 NAMESPACE=gpu-runtime REGISTRY_USER=... REGISTRY_PASSWORD=... ./create-registry-secret.sh
 ```
@@ -51,7 +51,8 @@ Either run it from that sibling repo directly, or copy the ~30-line script into 
 
 ### T-K8S-1 — Containerize `gpu-gateway`
 
-New `Dockerfile` (repo root or `deployment/docker/`, matching the naming convention `content_extractor`/`platform` already use): multi-stage, `eclipse-temurin:21-jdk` build stage → `eclipse-temurin:21-jre-alpine` runtime stage.
+New `Dockerfile` (repo root or `deployment/docker/`, matching the naming convention `content_extractor`/`platform` already use): multi-stage, `eclipse-temurin:21-jdk` build stage → `eclipse-temurin:21-jre` runtime stage.
+21-jdk-alpine shouldn't be used because native grpc tools libs are missing in alpine image.
 
 Build command: `./gradlew :java:gpu-gateway:bootJar`. Output jar lands at `java/gpu-gateway/build/libs/gpu-gateway-<version>.jar` (Gradle project name `gpu-gateway`, version from root `build.gradle.kts`'s `version = "0.1.0-SNAPSHOT"`). Spring Boot's Gradle plugin sets `Main-Class` in the jar manifest automatically — no explicit override needed, but the real class is `org.synanton.gpu.GpuGatewayApplication` if one is ever needed for documentation. `java:gpu-contract` needs no separate packaging or COPY step — it's a compile-time dependency already bundled into `gpu-gateway`'s fat jar.
 
