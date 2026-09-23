@@ -1,0 +1,109 @@
+# GPU Gateway (T-K8S-1/4/8) — node1, CPU-only. Sole public entry point.
+# Ports: 8080 public API, 8090 internal (JWKS for Envoy), 8091 health/metrics (spec §8).
+# Secrets (created imperatively, never committed — plan §7):
+#   gpu-gateway-jwt-keys  (ES256 signing keys, file-mounted per §12 - never env vars)
+#   gpu-gateway-pepper    (API-key pepper, §13.2)
+#   gpu-postgres-cred     (shared with the postgres Deployment)
+# NOTE: env var names below are the deployment contract; align with the app's
+# configuration binding during T-K8S-1/4 if the implementation uses different keys.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-gateway
+  namespace: gpu-plane
+  labels:
+    app: gpu-gateway
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: gpu-gateway
+  template:
+    metadata:
+      labels:
+        app: gpu-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8091"
+    spec:
+      nodeName: node1
+      imagePullSecrets:
+        - name: local-registry-cred
+      terminationGracePeriodSeconds: 45 # spec §31 (drain budget 30 s < this)
+      containers:
+        - name: gateway
+          image: local-registry:5000/gpu-gateway:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            - name: GPU_DEPLOYMENT_MODE
+              value: local-only # §5.3; startup fails closed on unsupported values (§5.5)
+            - name: GPU_DB_JDBC_URL
+              value: jdbc:postgresql://postgres:5432/gpu_plane
+            - name: GPU_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: gpu-postgres-cred
+                  key: POSTGRES_USER
+            - name: GPU_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gpu-postgres-cred
+                  key: POSTGRES_PASSWORD
+            - name: GPU_API_KEY_PEPPER
+              valueFrom:
+                secretKeyRef:
+                  name: gpu-gateway-pepper
+                  key: pepper
+            - name: GPU_JWT_KEY_DIR
+              value: /etc/gpu-gateway/keys # file-mounted keys, §12
+            - name: GPU_ENVOY_URL
+              value: http://envoy:8080
+          ports:
+            - { containerPort: 8080, name: api }
+            - { containerPort: 8090, name: internal }
+            - { containerPort: 8091, name: metrics }
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          volumeMounts:
+            - name: jwt-keys
+              mountPath: /etc/gpu-gateway/keys
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8091
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8091
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: jwt-keys
+          secret:
+            secretName: gpu-gateway-jwt-keys
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-gateway
+  namespace: gpu-plane
+spec:
+  selector:
+    app: gpu-gateway
+  ports:
+    - { name: api, port: 8080, targetPort: 8080 }
+    - { name: internal, port: 8090, targetPort: 8090 }
+    - { name: metrics, port: 8091, targetPort: 8091 }
+  type: ClusterIP

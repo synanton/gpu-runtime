@@ -10,7 +10,9 @@ import org.synanton.gpu.domain.port.out.ExecutionRuntime;
 import org.synanton.gpu.domain.service.HeartbeatManager;
 import org.synanton.gpu.v1.ExecutionRequest;
 import org.synanton.gpu.v1.Operation;
+import org.synanton.gpu.v1.Provider;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -24,40 +26,38 @@ import java.net.http.HttpTimeoutException;
 import java.time.Duration;
 
 /**
- * vLLM HTTP runtime adapter. Active when {@code gpu-gateway.dispatch.strategy=vllm}.
+ * OpenRouter HTTP runtime adapter. Active when {@code gpu-gateway.dispatch.strategy=openrouter}.
  *
- * <p>Routes requests to the appropriate vLLM endpoint by operation:
+ * <p>Routes requests to OpenRouter.ai API endpoints by operation:
  * <ul>
  *   <li>SYNTHESIZE → POST /v1/chat/completions</li>
  *   <li>EMBED      → POST /v1/embeddings</li>
  *   <li>RERANK     → POST /v1/rerank</li>
  * </ul>
  *
- * <p>{@link RetryDisposition} classification rules (HTTP-status based, not exception-based):
- * <ul>
- *   <li>ConnectException before sending → NOT_ACCEPTED</li>
- *   <li>4xx client error → DEFINITELY_FAILED</li>
- *   <li>5xx server error (502/503/504 before body) → NOT_ACCEPTED</li>
- *   <li>HttpTimeoutException → ACCEPTED_UNKNOWN (request may have completed)</li>
- *   <li>IOException after headers sent → ACCEPTED_UNKNOWN</li>
- *   <li>200 with vLLM error field → DEFINITELY_FAILED</li>
- * </ul>
+ * <p>OpenRouter provides OpenAI-compatible API with access to multiple free and paid models.
  */
 @Component
 @Slf4j
-public class VllmRuntime implements ExecutionRuntime {
+public class OpenRouterRuntime implements ExecutionRuntime {
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
     private final HeartbeatManager heartbeatManager;
     private final Duration requestTimeout;
+    private final String apiKey;
+    private final String baseUrl;
 
-    public VllmRuntime(ObjectMapper objectMapper,
-                       HeartbeatManager heartbeatManager,
-                       Duration dispatchTimeout) {
+    public OpenRouterRuntime(ObjectMapper objectMapper,
+                             HeartbeatManager heartbeatManager,
+                             Duration dispatchTimeout,
+                             @Qualifier("openRouterApiKey") String apiKey,
+                             @Qualifier("openRouterBaseUrl") String baseUrl) {
         this.objectMapper = objectMapper;
         this.heartbeatManager = heartbeatManager;
         this.requestTimeout = dispatchTimeout;
+        this.apiKey = apiKey;
+        this.baseUrl = baseUrl != null ? baseUrl : "https://openrouter.ai/api/v1";
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(10))
                 .build();
@@ -66,18 +66,23 @@ public class VllmRuntime implements ExecutionRuntime {
     @Override
     public RuntimeResult execute(ExecutionRequest request, RuntimeTarget target) {
         String endpoint = resolveEndpoint(target.endpointUrl(), request.getOperation());
-        String executionId = request.getRequestId(); // used for heartbeat key; overridden at call site
+        String executionId = request.getRequestId();
 
-        log.info("vLLM dispatch: operation={} endpoint={}", request.getOperation(), endpoint);
+        log.info("OpenRouter dispatch: operation={} endpoint={}", request.getOperation(), endpoint);
 
         HeartbeatManager.HeartbeatHandle heartbeat = heartbeatManager.start(executionId);
         long startMs = System.currentTimeMillis();
 
         try {
+            byte[] payload = request.getPayload().toByteArray();
+
             HttpRequest httpRequest = HttpRequest.newBuilder()
                     .uri(URI.create(endpoint))
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(request.getPayload().toByteArray()))
+                    .header("Authorization", "Bearer " + apiKey)
+                    .header("HTTP-Referer", "https://synanton.ai")
+                    .header("X-Title", "Synanton GPU Gateway")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                     .timeout(requestTimeout)
                     .build();
 
@@ -88,19 +93,19 @@ public class VllmRuntime implements ExecutionRuntime {
             return parseResponse(response, durationMs, target.runtimeClass());
 
         } catch (ConnectException e) {
-            log.warn("vLLM connect failed: {}", e.getMessage());
+            log.warn("OpenRouter connect failed: {}", e.getMessage());
             return new RuntimeResult.Failure(
-                    ExecutionError.retryable("RUNTIME_UNAVAILABLE", "vLLM connection refused: " + e.getMessage()),
+                    ExecutionError.retryable("RUNTIME_UNAVAILABLE", "OpenRouter connection refused: " + e.getMessage()),
                     RetryDisposition.NOT_ACCEPTED);
 
         } catch (HttpTimeoutException e) {
-            log.warn("vLLM request timed out after {}ms", System.currentTimeMillis() - startMs);
+            log.warn("OpenRouter request timed out after {}ms", System.currentTimeMillis() - startMs);
             return new RuntimeResult.Failure(
-                    ExecutionError.nonRetryable("RUNTIME_TIMEOUT", "vLLM request timed out"),
+                    ExecutionError.nonRetryable("RUNTIME_TIMEOUT", "OpenRouter request timed out"),
                     RetryDisposition.ACCEPTED_UNKNOWN);
 
         } catch (IOException e) {
-            log.warn("vLLM IO error (request may have been received): {}", e.getMessage());
+            log.warn("OpenRouter IO error (request may have been received): {}", e.getMessage());
             return new RuntimeResult.Failure(
                     ExecutionError.nonRetryable("RUNTIME_FAILED", "IO error: " + e.getMessage()),
                     RetryDisposition.ACCEPTED_UNKNOWN);
@@ -117,9 +122,7 @@ public class VllmRuntime implements ExecutionRuntime {
 
     @Override
     public CancellationResult cancel(String executionId, RuntimeTarget target) {
-        // vLLM does not expose a per-request cancellation endpoint in standard deployments.
-        // Best-effort: log and report as not-applicable; the lease will expire naturally.
-        log.info("Cancel requested for execution_id={} — vLLM cancellation not supported", executionId);
+        log.info("Cancel requested for execution_id={} — OpenRouter cancellation not supported", executionId);
         return new CancellationResult.NotFound();
     }
 
@@ -127,7 +130,8 @@ public class VllmRuntime implements ExecutionRuntime {
     public RuntimeStatus ping(String executionId, RuntimeTarget target) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(target.endpointUrl() + "/health"))
+                    .uri(URI.create(target.endpointUrl() + "/models"))
+                    .header("Authorization", "Bearer " + apiKey)
                     .GET()
                     .timeout(Duration.ofSeconds(5))
                     .build();
@@ -152,32 +156,31 @@ public class VllmRuntime implements ExecutionRuntime {
         if (status >= 400 && status < 500) {
             return new RuntimeResult.Failure(
                     ExecutionError.nonRetryable("RUNTIME_FAILED",
-                            "vLLM client error HTTP " + status + ": " + truncate(response.body())),
+                            "OpenRouter client error HTTP " + status + ": " + truncate(response.body())),
                     RetryDisposition.DEFINITELY_FAILED);
         }
 
         if (status == 503 || status == 502 || status == 504) {
             return new RuntimeResult.Failure(
                     ExecutionError.retryable("RUNTIME_UNAVAILABLE",
-                            "vLLM unavailable HTTP " + status),
+                            "OpenRouter unavailable HTTP " + status),
                     RetryDisposition.NOT_ACCEPTED);
         }
 
         if (status >= 500) {
             return new RuntimeResult.Failure(
                     ExecutionError.nonRetryable("RUNTIME_FAILED",
-                            "vLLM server error HTTP " + status),
+                            "OpenRouter server error HTTP " + status),
                     RetryDisposition.DEFINITELY_FAILED);
         }
 
         try {
             JsonNode body = objectMapper.readTree(response.body());
 
-            // vLLM error field present in 200 response (rare)
             if (body.has("error")) {
                 String errMsg = body.path("error").path("message").asText("unknown error");
                 return new RuntimeResult.Failure(
-                        ExecutionError.nonRetryable("RUNTIME_FAILED", "vLLM error: " + errMsg),
+                        ExecutionError.nonRetryable("RUNTIME_FAILED", "OpenRouter error: " + errMsg),
                         RetryDisposition.DEFINITELY_FAILED);
             }
 
@@ -185,9 +188,9 @@ public class VllmRuntime implements ExecutionRuntime {
             return new RuntimeResult.Success(usage, response.body().getBytes());
 
         } catch (Exception e) {
-            log.warn("Failed to parse vLLM response: {}", e.getMessage());
+            log.warn("Failed to parse OpenRouter response: {}", e.getMessage());
             return new RuntimeResult.Failure(
-                    ExecutionError.nonRetryable("RUNTIME_FAILED", "Failed to parse vLLM response"),
+                    ExecutionError.nonRetryable("RUNTIME_FAILED", "Failed to parse OpenRouter response"),
                     RetryDisposition.COMPLETED_UNKNOWN);
         }
     }
@@ -200,10 +203,11 @@ public class VllmRuntime implements ExecutionRuntime {
     }
 
     private String resolveEndpoint(String baseUrl, Operation operation) {
+        String providerBaseUrl = baseUrl != null && !baseUrl.isEmpty() ? baseUrl : this.baseUrl;
         return switch (operation) {
-            case SYNTHESIZE -> baseUrl + "/v1/chat/completions";
-            case EMBED      -> baseUrl + "/v1/embeddings";
-            case RERANK     -> baseUrl + "/v1/rerank";
+            case SYNTHESIZE -> providerBaseUrl + "/chat/completions";
+            case EMBED      -> providerBaseUrl + "/embeddings";
+            case RERANK     -> providerBaseUrl + "/rerank";
             default         -> throw new IllegalArgumentException("Unknown operation: " + operation);
         };
     }

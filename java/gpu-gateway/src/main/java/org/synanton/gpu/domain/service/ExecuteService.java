@@ -1,11 +1,21 @@
 package org.synanton.gpu.domain.service;
 
+import org.synanton.gpu.adapter.out.runtime.ModelCatalogService;
+import org.synanton.gpu.adapter.out.runtime.OpenRouterModelManager;
+import org.synanton.gpu.adapter.out.runtime.OpenRouterRuntime;
+import org.synanton.gpu.adapter.out.runtime.VllmModelManager;
+import org.synanton.gpu.adapter.out.runtime.VllmRuntime;
+import org.synanton.gpu.config.GpuGatewayProperties;
 import org.synanton.gpu.domain.model.*;
-import org.synanton.gpu.domain.model.*;
-import org.synanton.gpu.domain.port.in.ExecuteUseCase;
-import org.synanton.gpu.domain.port.out.*;
-import org.synanton.gpu.domain.port.out.*;
+import org.synanton.gpu.domain.port.in.*;
+import org.synanton.gpu.domain.port.out.ExecutionRepository;
+import org.synanton.gpu.domain.port.out.ExecutionRuntime;
+import org.synanton.gpu.domain.port.out.ExecutionScheduler;
+import org.synanton.gpu.domain.port.out.ModelManager;
+import org.synanton.gpu.domain.port.out.ModelRepository;
 import org.synanton.gpu.v1.ExecutionRequest;
+import org.synanton.gpu.v1.Operation;
+import org.synanton.gpu.v1.Provider;
 import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
@@ -13,15 +23,12 @@ import org.springframework.stereotype.Service;
 import java.util.Optional;
 
 /**
- * Core use case: admit, persist, dispatch, and record a GPU execution.
+ * Enhanced ExecuteService with provider routing support for GPU-7 (GPU-5 + GPU-7 external providers).
  *
- * <p>State progression: ACCEPTED → QUEUED → MODEL_LOADING (if needed) → RUNNING → terminal.
- *
- * <p>Admission invariant: advisory lock + concurrency check + INSERT are inside a single
- * PostgreSQL transaction, preventing any two concurrent calls from consuming the same slot.
- *
- * <p>Heartbeat invariant: a lease refresh fires every {@code heartbeatInterval} while the
- * execution is RUNNING. GetStatusService uses the expired lease to detect crashed Gateways.
+ * Provider routing logic:
+ * - LOCAL provider → VllmRuntime (GPU-5 local vLLM)
+ * - OPENROUTER provider → OpenRouterRuntime (GPU-7 external provider)
+ * - Tenant-specific model selection from ModelCatalogService
  */
 @Service
 @Slf4j
@@ -33,10 +40,13 @@ public class ExecuteService implements ExecuteUseCase {
     private final ExecutionAdmissionService executionAdmissionService;
     private final ExecutionRepository executionRepository;
     private final ExecutionScheduler executionScheduler;
-    private final ExecutionRuntime executionRuntime;
+    private final VllmRuntime vllmRuntime;
+    private final VllmModelManager vllmModelManager;
+    private final OpenRouterRuntime openRouterRuntime;
+    private final OpenRouterModelManager openRouterModelManager;
     private final ModelRepository modelRepository;
-    private final ModelManager modelManager;
     private final HeartbeatManager heartbeatManager;
+    private final ModelCatalogService modelCatalogService;
 
     @Override
     public Execution execute(ExecutionRequest request) {
@@ -56,15 +66,46 @@ public class ExecuteService implements ExecuteUseCase {
             return admitted; // Race: another thread completed it
         }
 
-        // GPU-3 execution path: model load → schedule → dispatch with heartbeat
-        return loadAndDispatch(request, admitted);
+        // GPU-7 execution path: route to appropriate runtime based on provider
+        return routeToRuntime(request, admitted);
     }
 
     /**
-     * Drives the execution through ACCEPTED → QUEUED → MODEL_LOADING → RUNNING → terminal.
-     * The runtime call is never transactional. Heartbeat fires during RUNNING.
+     * Route execution to appropriate runtime based on provider (GPU-5 vs GPU-7).
+     * This is the main provider routing implementation for Phase 1.
      */
-    private Execution loadAndDispatch(ExecutionRequest request, Execution admitted) {
+    private Execution routeToRuntime(ExecutionRequest request, Execution admitted) {
+        String executionId = admitted.executionId();
+        Provider provider = request.getProvider();
+
+        log.info("Routing execution_id={} to provider={}", executionId, provider);
+
+        ExecutionRuntime executionRuntime;
+        ModelManager modelManager;
+
+        if (provider == Provider.OPENROUTER) {
+            executionRuntime = openRouterRuntime;
+            modelManager = openRouterModelManager;
+            log.info("Routing to OPENROUTER provider for execution_id={}", executionId);
+        } else {
+            executionRuntime = vllmRuntime;
+            modelManager = vllmModelManager;
+            log.info("Routing to LOCAL provider (GPU-5) for execution_id={}", executionId);
+        }
+
+        return loadAndDispatchWithProvider(request, admitted, executionRuntime, modelManager);
+    }
+
+    /**
+     * Load and dispatch execution with the selected runtime.
+     * This is the refactored version of the original loadAndDispatch method.
+     */
+    private Execution loadAndDispatchWithProvider(
+            ExecutionRequest request,
+            Execution admitted,
+            ExecutionRuntime executionRuntime,
+            ModelManager providerModelManager) {
+
         String executionId = admitted.executionId();
 
         // ACCEPTED → QUEUED
@@ -72,12 +113,12 @@ public class ExecuteService implements ExecuteUseCase {
 
         // Ensure model is ready (may block; transitions to MODEL_LOADING if loading required)
         try {
-            ModelStatus status = modelManager.getStatus(request.getModel());
+            ModelStatus status = providerModelManager.getStatus(request.getModel());
             if (status != ModelStatus.READY) {
                 executionRepository.transitionState(
                         executionId, ExecutionState.QUEUED, ExecutionState.MODEL_LOADING);
                 log.info("Model loading: execution_id={} model={}", executionId, request.getModel());
-                modelManager.ensureReady(request.getModel());
+                providerModelManager.ensureReady(request.getModel());
                 // MODEL_LOADING → QUEUED: ready to be dispatched
                 executionRepository.transitionState(
                         executionId, ExecutionState.MODEL_LOADING, ExecutionState.QUEUED);
@@ -103,8 +144,10 @@ public class ExecuteService implements ExecuteUseCase {
                         "Model capabilities disappeared after admission: " + request.getModel()));
         RuntimeTarget target = executionScheduler.schedule(request, capabilities);
         executionRepository.transitionState(executionId, ExecutionState.QUEUED, ExecutionState.RUNNING);
-        log.info("Dispatching execution_id={} target={}", executionId, target.endpointUrl());
+        log.info("Dispatching execution_id={} target={} provider={}", executionId, target.endpointUrl(),
+                request.getProvider());
 
+        // Use provider-specific execution runtime
         HeartbeatManager.HeartbeatHandle heartbeat = heartbeatManager.start(executionId);
         try {
             ExecutionRuntime.RuntimeResult result = executionRuntime.execute(request, target);
@@ -112,6 +155,14 @@ public class ExecuteService implements ExecuteUseCase {
         } finally {
             heartbeat.stop();
         }
+    }
+
+    /**
+     * Helper method to resolve provider model ID using ModelCatalogService.
+     * This provides tenant-specific model selection and mapping.
+     */
+    private String resolveProviderModelId(String tenantId, String logicalModelId, Provider provider, Operation operation) {
+        return modelCatalogService.resolveProviderModelId(logicalModelId, operation);
     }
 
     private Execution recordResult(String executionId, ExecutionRuntime.RuntimeResult result) {

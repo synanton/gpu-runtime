@@ -1,5 +1,6 @@
 package org.synanton.gpu.domain.service;
 
+import org.synanton.gpu.adapter.out.runtime.RuntimeFactory;
 import org.synanton.gpu.domain.model.Execution;
 import org.synanton.gpu.domain.model.ExecutionError;
 import org.synanton.gpu.domain.model.ExecutionState;
@@ -27,7 +28,7 @@ import java.util.Optional;
 public class GetStatusService implements GetStatusUseCase {
 
     private final ExecutionRepository executionRepository;
-    private final ExecutionRuntime executionRuntime;
+    private final RuntimeFactory runtimeFactory;
     private final ExecutionScheduler executionScheduler;
     private final ModelRepository modelRepository;
 
@@ -66,7 +67,7 @@ public class GetStatusService implements GetStatusUseCase {
         modelRepository.getCapabilities(execution.modelId()).ifPresentOrElse(
                 capabilities -> {
                     var target = executionScheduler.schedule(null, capabilities);
-                    var runtimeStatus = executionRuntime.ping(execution.executionId(), target);
+                    var runtimeStatus = runtimeFactory.getDefaultRuntime().ping(execution.executionId(), target);
 
                     switch (runtimeStatus) {
                         case ALIVE -> {

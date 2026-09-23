@@ -1,0 +1,95 @@
+# GPU-7 deployment contract (spec §26/§33/§39-§44b). Consumed by the Gateway via
+# GPU_PROVIDER_CONFIG, merged over the bundled application.yml.
+#
+# The `gpu-gateway.providers` / `gpu-gateway.model-catalog` schema below matches the
+# existing code (OpenRouterRuntime / OpenRouterModelManager / ModelCatalogService).
+# Keys marked [T-K8S-xx] are the GPU-7 ticket additions — startup validation (§5.5)
+# must fail closed on any inconsistency here once those land.
+
+gpu-gateway:
+  dispatch:
+    strategy: external        # GPU-7 routing: provider adapters, never local vLLM.
+                              # [T-K8S-44/§39] mode external-only; local-only/auto invalid.
+
+  # [T-K8S-39/§32] kill switch: disabled => ALL external routing denied, fail closed.
+  routing:
+    external-enabled: true
+
+  providers:
+    openrouter:               # existing code schema (OpenRouterRuntime)
+      api-key: ${OPENROUTER_API_KEY:}    # §29: env-var reference, never inline, never logged
+      base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}   # HTTPS only (§29)
+      enabled: true           # [T-K8S-38] persisted control state, survives restart
+      health:                 # [T-K8S-46] tracked independently of Gateway health
+        path: /models
+        interval-seconds: 60
+      circuit-breaker:        # [T-K8S-45]
+        failure-threshold: 5
+        reset-seconds: 60
+    mock:                     # T-K8S-51 acceptance provider (in-compose, plain HTTP
+      api-key: ${MOCK_PROVIDER_API_KEY:}  #  inside the compose network only)
+      base-url: http://mock-provider:8080
+      enabled: true
+      health:
+        path: /healthz
+        interval-seconds: 30
+      circuit-breaker:
+        failure-threshold: 5
+        reset-seconds: 30
+
+  model-catalog:
+    operations:
+      SYNTHESIZE:
+        default-model: mock-chat-1
+        models:
+          mock-chat-1:
+            provider: MOCK
+            provider-model-id: mock-chat-1
+            display-name: "Mock Chat (acceptance)"
+            is-default: true
+            max-input-tokens: 8192
+            max-output-tokens: 2048
+          gpt-4o-mini:        # real arm via OpenRouter
+            provider: OPENROUTER
+            provider-model-id: openai/gpt-4o-mini
+            display-name: "GPT-4o Mini"
+            max-input-tokens: 128000
+            max-output-tokens: 16384
+      EMBED:
+        default-model: mock-embedding-1
+        models:
+          mock-embedding-1:
+            provider: MOCK
+            provider-model-id: mock-embedding-1
+            display-name: "Mock Embedding (acceptance)"
+            is-default: true
+            max-input-tokens: 8192
+            embedding-dim: 1536
+          text-embedding-3-small:   # platform benchmark's opt-in external arm
+            provider: OPENROUTER    # (platform/docs/research/retrieval-evaluation-benchmark-plan.md §3.3)
+            provider-model-id: openai/text-embedding-3-small
+            display-name: "OpenAI text-embedding-3-small"
+            max-input-tokens: 8192
+            embedding-dim: 1536
+      RERANK:
+        default-model: mock-reranker-1
+        models:
+          mock-reranker-1:    # §40: advertised only because mock mapping supports it
+            provider: MOCK
+            provider-model-id: mock-reranker-1
+            display-name: "Mock Reranker (acceptance)"
+            is-default: true
+            max-input-tokens: 4096
+
+  # [T-K8S-49] sensitivity policy — fail closed; tagged models never route externally
+  sensitivity:
+    block-external-tags: [sensitive, pii]
+
+  # [T-K8S-48b] budget enforcement — fail closed; state in PostgreSQL (§33)
+  budget:
+    enforcement: enabled
+    default-daily-usd: 5.00
+
+  # [T-K8S-48] cost ledger — provider-reported usage is authoritative (§10.2)
+  usage:
+    cost-ledger: enabled

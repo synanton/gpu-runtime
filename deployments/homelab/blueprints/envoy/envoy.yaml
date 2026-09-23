@@ -1,0 +1,79 @@
+# Envoy execution perimeter (spec §6; ticket T-K8S-6) — node1, CPU-only.
+# Separate Deployment/Service from the Gateway (spec §2.1). Must not become ready
+# before the Gateway publishes JWKS — the readiness probe hits /ready, which only
+# passes once the jwt_authn remote_jwks fetch has succeeded (fail-closed, §12).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: envoy
+  namespace: gpu-plane
+  labels:
+    app: envoy
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: envoy
+  template:
+    metadata:
+      labels:
+        app: envoy
+    spec:
+      nodeName: node1
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: envoy
+          image: local-registry:5000/envoy:v1.31.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - -c
+            - /etc/envoy/envoy.yaml
+            - --log-level
+            - info
+          ports:
+            - containerPort: 8080
+          resources:
+            requests:
+              cpu: "0.5"
+              memory: 256Mi
+            limits:
+              cpu: "2"
+              memory: 1Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/envoy
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 5
+            periodSeconds: 5
+            failureThreshold: 12 # wait for JWKS fetch (Gateway readiness precedes Envoy, §12)
+          livenessProbe:
+            httpGet:
+              path: /ready
+              port: 9901
+            initialDelaySeconds: 30
+            periodSeconds: 15
+      volumes:
+        - name: config
+          configMap:
+            name: envoy-config
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: envoy
+  namespace: gpu-plane
+spec:
+  selector:
+    app: envoy
+  ports:
+    - protocol: TCP
+      port: 8080
+      targetPort: 8080
+  type: ClusterIP

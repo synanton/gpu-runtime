@@ -1,0 +1,146 @@
+# NetworkPolicy for gpu-plane (spec §19, T-K8S-11).
+# Default-deny, then allow exactly the §19 flows:
+#   Client -> Gateway (ingress from outside the namespace)
+#   Gateway -> Envoy, Envoy -> vLLM, Gateway -> PostgreSQL, Envoy -> Gateway (JWKS)
+# Direct client access to Envoy/vLLM/PostgreSQL is denied by the default-deny base.
+# DNS (kube-system) is allowed for everyone.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+  namespace: gpu-plane
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+  namespace: gpu-plane
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels:
+              kubernetes.io/metadata.name: kube-system
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway
+  namespace: gpu-plane
+spec:
+  podSelector:
+    matchLabels:
+      app: gpu-gateway
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # public API from outside the namespace (clients / Traefik)
+    - ports:
+        - { protocol: TCP, port: 8080 }
+    # JWKS from Envoy only
+    - from:
+        - podSelector:
+            matchLabels:
+              app: envoy
+      ports:
+        - { protocol: TCP, port: 8090 }
+    # metrics scrape
+    - ports:
+        - { protocol: TCP, port: 8091 }
+  egress:
+    # Gateway -> Envoy
+    - to:
+        - podSelector:
+            matchLabels:
+              app: envoy
+      ports:
+        - { protocol: TCP, port: 8080 }
+    # Gateway -> PostgreSQL
+    - to:
+        - podSelector:
+            matchLabels:
+              app: postgres
+      ports:
+        - { protocol: TCP, port: 5432 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: envoy
+  namespace: gpu-plane
+spec:
+  podSelector:
+    matchLabels:
+      app: envoy
+  policyTypes: [Ingress, Egress]
+  ingress:
+    # execution traffic from the Gateway only
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gpu-gateway
+      ports:
+        - { protocol: TCP, port: 8080 }
+  egress:
+    # Envoy -> Gateway JWKS
+    - to:
+        - podSelector:
+            matchLabels:
+              app: gpu-gateway
+      ports:
+        - { protocol: TCP, port: 8090 }
+    # Envoy -> all three vLLM services
+    - to:
+        - podSelector:
+            matchExpressions:
+              - key: app
+                operator: In
+                values: [vllm-synthesis, vllm-embed-rerank]
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: vllm
+  namespace: gpu-plane
+spec:
+  podSelector:
+    matchExpressions:
+      - key: app
+        operator: In
+        values: [vllm-synthesis, vllm-embed-rerank]
+  policyTypes: [Ingress]
+  ingress:
+    # vLLM accepts traffic from Envoy only (§6: direct access prohibited)
+    - from:
+        - podSelector:
+            matchLabels:
+              app: envoy
+      ports:
+        - { protocol: TCP, port: 8000 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+  namespace: gpu-plane
+spec:
+  podSelector:
+    matchLabels:
+      app: postgres
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels:
+              app: gpu-gateway
+      ports:
+        - { protocol: TCP, port: 5432 }

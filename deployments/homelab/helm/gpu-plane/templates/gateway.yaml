@@ -1,0 +1,75 @@
+# Gateway — sole public entry point (spec §2.1). Secrets are referenced by name
+# and created imperatively (plan §7); they are never rendered by this chart.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-gateway
+  labels: { app: gpu-gateway }
+spec:
+  replicas: 1
+  strategy: { type: RollingUpdate }
+  selector:
+    matchLabels: { app: gpu-gateway }
+  template:
+    metadata:
+      labels: { app: gpu-gateway }
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8091"
+    spec:
+      nodeName: {{ .Values.placement.gatewayNode }}
+      {{- include "gpu-plane.pullSecrets" . | nindent 6 }}
+      terminationGracePeriodSeconds: {{ .Values.gateway.terminationGracePeriodSeconds }}
+      containers:
+        - name: gateway
+          image: {{ include "gpu-plane.image" (list . .Values.images.gateway) }}
+          imagePullPolicy: IfNotPresent
+          env:
+            - { name: GPU_DEPLOYMENT_MODE, value: {{ .Values.gateway.mode | quote }} }
+            - { name: GPU_DB_JDBC_URL, value: {{ .Values.gateway.jdbcUrl | quote }} }
+            - name: GPU_DB_USER
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.postgresCred }}, key: POSTGRES_USER }
+            - name: GPU_DB_PASSWORD
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.postgresCred }}, key: POSTGRES_PASSWORD }
+            - name: GPU_API_KEY_PEPPER
+              valueFrom:
+                secretKeyRef: { name: {{ .Values.secrets.gatewayPepper }}, key: pepper }
+            - { name: GPU_JWT_KEY_DIR, value: /etc/gpu-gateway/keys }
+            - { name: GPU_ENVOY_URL, value: {{ .Values.gateway.envoyUrl | quote }} }
+          ports:
+            - { containerPort: 8080, name: api }
+            - { containerPort: 8090, name: internal }
+            - { containerPort: 8091, name: metrics }
+          resources:
+            requests: { cpu: "1", memory: 1Gi }
+            limits: { cpu: "4", memory: 4Gi }
+          volumeMounts:
+            - { name: jwt-keys, mountPath: /etc/gpu-gateway/keys, readOnly: true }
+          readinessProbe:
+            httpGet: { path: /actuator/health/readiness, port: 8091 }
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            httpGet: { path: /actuator/health/liveness, port: 8091 }
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: jwt-keys
+          secret:
+            secretName: {{ .Values.secrets.gatewayJwtKeys }}
+            defaultMode: 0400
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-gateway
+spec:
+  selector: { app: gpu-gateway }
+  ports:
+    - { name: api, port: 8080, targetPort: 8080 }
+    - { name: internal, port: 8090, targetPort: 8090 }
+    - { name: metrics, port: 8091, targetPort: 8091 }
+  type: ClusterIP

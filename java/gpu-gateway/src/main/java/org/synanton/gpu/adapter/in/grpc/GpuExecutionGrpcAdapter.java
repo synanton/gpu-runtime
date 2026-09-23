@@ -4,6 +4,7 @@ import org.synanton.gpu.domain.model.Execution;
 import org.synanton.gpu.domain.port.in.CancelUseCase;
 import org.synanton.gpu.domain.port.in.ExecuteUseCase;
 import org.synanton.gpu.domain.port.in.GetCapacityUseCase;
+import org.synanton.gpu.domain.port.in.GetModelsUseCase;
 import org.synanton.gpu.domain.port.in.GetStatusUseCase;
 import org.synanton.gpu.domain.service.AdmissionService.AdmissionException;
 import org.synanton.gpu.domain.service.IdempotencyService.RequestIdReuseException;
@@ -21,6 +22,8 @@ import org.synanton.gpu.v1.ExecutionResponse;
 import org.synanton.gpu.v1.ExecutionStatus;
 import org.synanton.gpu.v1.GPUExecutionServiceGrpc;
 import org.synanton.gpu.v1.GetCapacityRequest;
+import org.synanton.gpu.v1.GetModelsRequest;
+import org.synanton.gpu.v1.GetModelsResponse;
 import org.synanton.gpu.v1.GetStatusRequest;
 
 import java.util.Optional;
@@ -37,6 +40,7 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
     private final CancelUseCase cancelUseCase;
     private final GetStatusUseCase getStatusUseCase;
     private final GetCapacityUseCase getCapacityUseCase;
+    private final GetModelsUseCase getModelsUseCase;
     private final ResponseMapper responseMapper;
 
     @Override
@@ -148,6 +152,20 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
                     );
         } catch (Exception e) {
             log.error("Unexpected error in GetCapacity: model={}", request.getModel(), e);
+            observer.onError(Status.INTERNAL.withDescription("Internal error").asRuntimeException());
+        }
+    }
+
+    @Override
+    public void getModels(GetModelsRequest request, StreamObserver<GetModelsResponse> observer) {
+        log.debug("GetModels: operation={} provider={} tenant={}",
+                request.getOperation(), request.getProvider(), request.getTenantId());
+        try {
+            GetModelsResponse response = getModelsUseCase.getModels(request);
+            observer.onNext(response);
+            observer.onCompleted();
+        } catch (Exception e) {
+            log.error("Unexpected error in GetModels: operation={}", request.getOperation(), e);
             observer.onError(Status.INTERNAL.withDescription("Internal error").asRuntimeException());
         }
     }

@@ -1,0 +1,69 @@
+# GPU-7 external-provider profile (spec §2.3/§26): Gateway + PostgreSQL + mock provider.
+# No GPU, no Envoy, no vLLM, no execution JWT. Single-node container deployment.
+#
+# Prereq: build the gateway image from the repo root first —
+#   ./gradlew bootJar
+#   docker build -f deployments/homelab/docker/gateway.Dockerfile -t gpu-gateway:0.1.0 .
+# Then: cp .env.example .env  (fill in),  docker compose up -d
+name: gpu-7-external
+
+services:
+  postgres:
+    image: postgres:16.4
+    environment:
+      POSTGRES_USER: gpu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: gpu_plane
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gpu -d gpu_plane"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  mock-provider:
+    build: ./mock-provider
+    environment:
+      MOCK_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
+      MOCK_PORT: "8080"
+      # failure injection for circuit-breaker / error-mapping acceptance (§37)
+      MOCK_FAIL_RATE: "0"        # 0..1 fraction of requests failing with HTTP 500
+      MOCK_LATENCY_MS: "0"       # artificial upstream latency
+      MOCK_RERANK_SUPPORTED: "1" # 0 -> /v1/rerank returns 400 (§40 capability gap path)
+    ports:
+      - "127.0.0.1:18080:8080" # direct mock access for debugging; Gateway is the real API
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  gateway:
+    image: gpu-gateway:0.1.0
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-provider:
+        condition: service_healthy
+    environment:
+      GPU_DEPLOYMENT_MODE: external-only # §5.4; anything else must fail closed (§5.5)
+      GPU_PROVIDER_CONFIG: /etc/gpu-gateway/gateway-external.yaml
+      GPU_DB_JDBC_URL: jdbc:postgresql://postgres:5432/gpu_plane
+      GPU_DB_USER: gpu
+      GPU_DB_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      GPU_API_KEY_PEPPER: ${GPU_API_KEY_PEPPER:?set in .env}
+      # provider credentials arrive as env vars referenced from config (§29)
+      MOCK_PROVIDER_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
+      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-} # optional real provider arm
+    volumes:
+      - ./config/gateway-external.yaml:/etc/gpu-gateway/gateway-external.yaml:ro
+    ports:
+      - "8080:8080" # public API
+      - "127.0.0.1:8091:8091" # health/metrics, localhost only
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

@@ -1,4 +1,4 @@
-package org.synanton.gpu.domain.port.out;
+package org.synanton.gpu.adapter.out.runtime;
 
 import org.synanton.gpu.domain.model.ExecutionError;
 import org.synanton.gpu.domain.model.ExecutionUsage;
@@ -7,30 +7,30 @@ import org.synanton.gpu.domain.model.RuntimeTarget;
 import org.synanton.gpu.v1.ExecutionRequest;
 
 /**
- * Outbound port for communicating with the GPU runtime (vLLM or external providers).
+ * Outbound port for communicating with external AI providers (OpenRouter, etc.).
  *
- * <p>Domain code depends only on this interface; the specific runtime implementations live in
- * {@code adapter/out/runtime/}. Kubernetes, pod IPs, and GPU topology must not leak through.
+ * <p>Domain code depends only on this interface; the external HTTP implementations live in
+ * {@code adapter/out/runtime/}. Provider endpoints and credentials must not leak through.
  *
- * <p>This interface supports both GPU-5 (local vLLM) and GPU-7 (external provider) runtime implementations.
+ * <p>This interface supports GPU-7 (external provider) runtime implementations.
  */
-public interface ExecutionRuntime {
+public interface ExternalProviderRuntime {
 
     /**
-     * Submits the request to the runtime and blocks until completion or timeout.
+     * Submits the request to the external provider and blocks until completion or timeout.
      *
      * @return the outcome of the execution attempt
      */
     RuntimeResult execute(ExecutionRequest request, RuntimeTarget target);
 
     /**
-     * Sends a best-effort cancellation signal to the runtime.
+     * Sends a best-effort cancellation signal to the external provider.
      * Returns the disposition of the cancellation attempt.
      */
     CancellationResult cancel(String executionId, RuntimeTarget target);
 
     /**
-     * Pings the runtime to check if the given execution is still live.
+     * Pings the external provider to check if the given execution is still live.
      * Used by lazy reconciliation in GetStatus.
      */
     RuntimeStatus ping(String executionId, RuntimeTarget target);

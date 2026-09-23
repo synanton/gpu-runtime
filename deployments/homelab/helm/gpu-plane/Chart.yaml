@@ -1,0 +1,6 @@
+apiVersion: v2
+name: gpu-plane
+description: Synanton GPU-5 homelab plane (Gateway + Envoy + vLLM + PostgreSQL)
+type: application
+version: 0.1.0
+appVersion: "0.1.0"

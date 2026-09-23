@@ -6,6 +6,7 @@ import org.synanton.gpu.domain.model.ModelStatus;
 import org.synanton.gpu.domain.port.out.ModelManager;
 import org.synanton.gpu.domain.port.out.ModelManager.ModelLoadException;
 import lombok.extern.slf4j.Slf4j;
+import org.springframework.beans.factory.annotation.Qualifier;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
 
@@ -16,22 +17,25 @@ import java.net.http.HttpResponse;
 import java.time.Duration;
 
 /**
- * ModelManager that queries the vLLM runtime via GET /v1/models.
- * Active when {@code gpu-gateway.dispatch.strategy=vllm}.
+ * ModelManager that queries the OpenRouter runtime via GET /v1/models.
+ * Active when {@code gpu-gateway.dispatch.strategy=openrouter}.
  */
 @Component
 @Slf4j
-public class VllmModelManager implements ModelManager {
+public class OpenRouterModelManager implements ModelManager {
 
-    private final String vllmEndpoint;
+    private final String baseUrl;
+    private final String apiKey;
     private final Duration modelLoadTimeout;
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
-    public VllmModelManager(String vllmEndpointUrl,
-                             Duration modelLoadTimeout,
-                             ObjectMapper objectMapper) {
-        this.vllmEndpoint = vllmEndpointUrl;
+    public OpenRouterModelManager(@Qualifier("openRouterBaseUrl") String baseUrl,
+                                   @Qualifier("openRouterApiKey") String apiKey,
+                                   Duration modelLoadTimeout,
+                                   ObjectMapper objectMapper) {
+        this.baseUrl = baseUrl != null ? baseUrl : "https://openrouter.ai/api/v1";
+        this.apiKey = apiKey;
         this.modelLoadTimeout = modelLoadTimeout;
         this.httpClient = HttpClient.newBuilder()
                 .connectTimeout(Duration.ofSeconds(5))
@@ -43,7 +47,8 @@ public class VllmModelManager implements ModelManager {
     public ModelStatus getStatus(String modelId) {
         try {
             HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(vllmEndpoint + "/v1/models"))
+                    .uri(URI.create(baseUrl + "/models"))
+                    .header("Authorization", "Bearer " + apiKey)
                     .GET()
                     .timeout(Duration.ofSeconds(5))
                     .build();
@@ -62,7 +67,7 @@ public class VllmModelManager implements ModelManager {
             }
             return ModelStatus.LOADING;
         } catch (Exception e) {
-            log.warn("Failed to query vLLM /v1/models for model={}: {}", modelId, e.getMessage());
+            log.warn("Failed to query OpenRouter /v1/models for model={}: {}", modelId, e.getMessage());
             return ModelStatus.UNKNOWN;
         }
     }
@@ -70,16 +75,16 @@ public class VllmModelManager implements ModelManager {
     @Override
     public void ensureReady(String modelId) {
         long deadlineMs = System.currentTimeMillis() + modelLoadTimeout.toMillis();
-        log.info("Ensuring model={} is ready (timeout={})", modelId, modelLoadTimeout);
+        log.info("Ensuring model={} is ready via OpenRouter (timeout={})", modelId, modelLoadTimeout);
 
         while (System.currentTimeMillis() < deadlineMs) {
             ModelStatus status = getStatus(modelId);
             switch (status) {
                 case READY -> {
-                    log.debug("Model={} is ready", modelId);
+                    log.debug("Model={} is ready on OpenRouter", modelId);
                     return;
                 }
-                case FAILED -> throw new ModelLoadException(modelId, "Model reported FAILED by runtime");
+                case FAILED -> throw new ModelLoadException(modelId, "Model reported FAILED by OpenRouter");
                 case LOADING, UNKNOWN -> {
                     log.debug("Model={} status={}, waiting...", modelId, status);
                     try {

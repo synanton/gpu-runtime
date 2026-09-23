@@ -139,7 +139,6 @@ All non-terminal states can transition to `FAILED` or `CANCELLED`. Terminal stat
 ```text
 gpu-runtime/
 ├── build.gradle.kts                     # Root build
-├── build.gradle.kts
 ├── settings.gradle.kts
 ├── gradle.properties
 │
@@ -147,79 +146,63 @@ gpu-runtime/
 │   └── rules/                           # AI-assisted development rules
 │       ├── java-rules.mdc               # Synanton Core Java conventions
 │       └── gpu-execution-rules.mdc      # GPU-specific invariants
+│
 ├── doc/
+│   ├── GPU-5  GPU-6  GPU-7 Deployment Plan.md   # Canonical deployment spec (v2.1.9)
+│   ├── GPU-5 Local Models Setup.md              # Qwen3 node-local model download/verify
+│   ├── TEST_ENVIRONMENT_SETUP.md
 │   ├── GPU Execution Plane Implementation Plan v1.20.md
 │   └── GPU Execution Plane Implementation Plan v1.21.md
 │
+├── deployments/
+│   ├── homelab/                         # [GPU-5] reference local-inference deployment
+│   │   ├── gpu-5-implementation-plan.md #   phased plan, decisions D1-D6, acceptance
+│   │   ├── claster-as-build.md          #   observed 4-node cluster inventory
+│   │   ├── blueprints/                  #   plain K8s manifests (phased bring-up)
+│   │   │   ├── vllm/                    #   synthesis (node2), embed+rerank colocated (node3)
+│   │   │   ├── postgres/                #   PostgreSQL 16 + Longhorn PVC (node1)
+│   │   │   ├── envoy/                   #   execution perimeter, ES256 JWT via JWKS
+│   │   │   ├── gateway/                 #   Gateway Deployment/Service
+│   │   │   └── network-policy/          #   default-deny + spec §19 flows
+│   │   ├── helm/gpu-plane/              #   packaged chart (post bring-up path)
+│   │   ├── docker/gateway.Dockerfile    #   T-K8S-1 image blueprint
+│   │   └── scripts/                     #   mirror-images / create-registry-secret / deploy /
+│   │                                    #   cluster-stop / cluster-start (safe power cycle)
+│   ├── external/                        # [GPU-7] external-provider profile (no GPU/Envoy/vLLM)
+│   │   ├── gpu-7-implementation-plan.md #   phased plan, T-K8S-38..53 mapping
+│   │   ├── compose.yaml                 #   single-node: gateway + postgres + mock-provider
+│   │   ├── config/gateway-external.yaml #   provider registry, mappings, kill switch, budget
+│   │   ├── mock-provider/               #   stdlib-only OpenAI-compatible mock (T-K8S-51)
+│   │   └── scripts/smoke-test.sh        #   positive/negative path checks (§37 subset)
+│   └── production/                      # [GPU-6] deferred — not a GPU-5/GPU-7 gate
+│
 ├── java/
 │   ├── gpu-contract/                    # Shared gRPC protobuf contracts
-│   │   ├── build.gradle.kts
-│   │   └── src/main/proto/Synanton/gpu/v1/
-│   │       ├── execution.proto
-│   │       ├── capacity.proto
-│   │       ├── common.proto
-│   │       └── error.proto
-│   ├── gpu-contract/                    # Protobuf contracts (generated gRPC stubs)
 │   │   └── src/main/proto/synanton/gpu/v1/
-│   │       ├── execution.proto          # Execute, Cancel, GetStatus RPCs
-│   │       ├── capacity.proto           # GetCapacity RPC
-│   │       ├── common.proto             # Shared types
-│   │       └── error.proto              # Error taxonomy enum
+│   │       └── gpu_execution_service.proto  # Execute/Cancel/GetStatus/GetCapacity/GetModels
 │   │
 │   └── gpu-gateway/                     # Main Spring Boot service
-│       ├── build.gradle.kts
 │       └── src/
-│           ├── main/java/com/Synanton/gpu/
+│           ├── main/java/org/synanton/gpu/
 │           │   ├── adapter/             # Hexagonal Architecture
 │           │   │   ├── in/              # gRPC, Schedules
 │           │   │   └── out/             # Database, Runtime, Registry, Security
 │           │   ├── domain/              # Use Cases, Models, Services
-│           │   │   ├── model/
-│           │   │   └── service/
 │           │   └── config/
 │           └── resources/
 │               ├── application.yml
-│               └── application-test.yml
-│
-├── migrations/                          # Flyway database migrations
-│   └── V1__create_executions.sql
-│
-├── helm/                                # Kubernetes Helm charts
-│   └── gpu-runtime/
-│       ├── Chart.yaml
-│       ├── values.yaml
-│       └── templates/
-│           ├── gateway-deployment.yaml
-│           ├── gateway-service.yaml
-│           ├── vllm-deployment.yaml
-│           ├── postgres-cluster.yaml    # HA (CloudNativePG)
-│           ├── idempotency-cleaner.yaml
-│           └── network-policies.yaml
-│
-├── deploy/                              # Additional K8s manifests
-│   └── k8s/
-│       ├── namespace.yaml
-│       ├── mtls/
-│       └── monitoring/
-│       └── src/main/java/com/synanton/gpu/
-│           ├── adapter/
-│           │   ├── in/grpc/             # GpuExecutionGrpcAdapter (Execute/Cancel/GetStatus/GetCapacity)
-│           │   └── out/                 # [GPU-3] database/, runtime/, registry/, schedule/, model/
-│           ├── domain/
-│           │   ├── model/               # Execution, ExecutionState, ModelCapabilities, …
-│           │   ├── port/
-│           │   │   ├── in/              # ExecuteUseCase, CancelUseCase, GetStatusUseCase, GetCapacityUseCase
-│           │   │   └── out/             # ExecutionRepository, ExecutionRuntime, ModelManager, …
-│           │   └── service/             # ExecuteService, AdmissionService, HeartbeatManager, …
-│           └── config/                  # GpuGatewayProperties, DomainConfig, GrpcServerLifecycle
+│               ├── application-test.yml
+│               └── db/migration/        # Flyway V1 (executions), V2 (artifact cache)
 │
 ├── scripts/
-│   ├── deploy-onprem.sh
-│   └── smoke-test.sh
+│   └── verify-gpu-contract-mirror.sh    # proto mirror check vs platform repo
+│
+├── tools/
+│   └── gpu-plane-check.py               # manual test CLI for GPU-5/GPU-7 Gateways
+│                                        # (models/chat/stream/embed/rerank/negative;
+│                                        #  validates §10 SSE, §16 envelopes, §21 IDs)
 │
 └── README.md
-├── helm/                                # [GPU-5] Kubernetes Helm charts
-└── deploy/                              # [GPU-5] Additional K8s manifests
 ```
 
 ------
@@ -232,8 +215,30 @@ gpu-runtime/
 | GPU-2 | Domain core & persistence | Complete |
 | GPU-3 | Runtime & model lifecycle | Complete |
 | GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
-| **GPU-5** | **Four-node homelab deployment + real embedding/reranking benchmark path** | **Planned** |
-| **GPU-6** | **Production deployment and operational hardening** | **Future** |
+| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + Qwen3-Embedding/Reranker 0.6B)** | **In progress — deployment package ready, cluster bring-up next** |
+| **GPU-7** | **External-provider profile (OpenAI-compatible adapter, no local GPU)** | **Deployment package defined; adapter partially in flight (OpenRouterRuntime)** |
+| **GPU-6** | **Production deployment and operational hardening** | **Deferred — not a GPU-5/GPU-7 gate** |
+
+### GPU-5 status (2026-09-23)
+
+Deployment content lives in [`deployments/homelab/`](deployments/homelab/gpu-5-implementation-plan.md):
+blueprint manifests (kubectl bring-up), `helm/gpu-plane` chart (packaged path), registry/scripts tooling.
+
+- [x] Model files verified on nodes (`/mnt/local-fast/models/...`): Qwen3-4B on node2, embedding+reranker on node3
+- [x] Node placement decided: node1 = CPU-only (Gateway/Envoy/PostgreSQL); node2 = synthesis; node3 = colocated embedding+reranker (one pod, two containers, one shared GPU)
+- [x] vLLM pinned to `v0.29.0` (CUDA 13.0 image matches node1-3 hosts; first release line with Qwen3-Embedding/Reranker support)
+- [ ] Cluster bring-up phases 0–9 (uncordon → registry mirror → postgres → vLLM → gateway → envoy JWT → policies → TLS → acceptance)
+
+### GPU-7 status (2026-09-23)
+
+Deployment package lives in [`deployments/external/`](deployments/external/gpu-7-implementation-plan.md):
+Docker Compose (gateway + PostgreSQL + mock provider), external-mode config contract
+(`config/gateway-external.yaml`, extending the existing `gpu-gateway.providers`/`model-catalog`
+schema with the T-K8S-38..52 ticket keys), smoke test.
+Adapter groundwork exists in `java/gpu-gateway` (`ExternalProviderRuntime` port,
+`OpenRouterRuntime`, `ModelCatalogService`, dispatch strategy `openrouter`).
+Unblocks the platform retrieval benchmark's T02/T03 rows (`platform/docs/research/gpu-plane-integration-tickets.md`)
+once the §37 acceptance paths pass against the mock provider.
 
 GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introducing production-scale scheduling complexity.
 
@@ -281,7 +286,7 @@ GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introdu
 
 - protobuf package `synanton.gpu.v1`
 - Java package `org.synanton.gpu.v1`
-- service `GPUExecutionService` (`Execute`, `Cancel`, `GetStatus`, `GetCapacity`)
+- service `GPUExecutionService` (`Execute`, `Cancel`, `GetStatus`, `GetCapacity`, `GetModels`)
 - `GetStatusRequest` / `ExecutionStatus`
 - `ErrorReason` catalogue (`ErrorInfo`)
 

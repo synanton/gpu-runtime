@@ -35,6 +35,71 @@ gpu-gateway:
     cache-dir: ${MODEL_CACHE_DIR:/model-cache}
     registry-base-url: ${MODEL_REGISTRY_URL:http://model-registry:8080}
 
+  providers:
+    openrouter:
+      api-key: ${OPENROUTER_API_KEY:}
+      base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
+      default-model: ${OPENROUTER_DEFAULT_MODEL:}
+      model-mapping: {}
+
+  model-catalog:
+    operations:
+      SYNTHESIZE:
+        default-model: "llama-3.1-8b-instruct"
+        models:
+          "llama-3.1-8b-instruct":
+            provider-model-id: "meta-llama/llama-3.1-8b-instruct:free"
+            display-name: "Llama 3.1 8B Instruct (Free)"
+            provider: "OPENROUTER"
+            is-default: true
+            max-input-tokens: 8192
+            max-output-tokens: 2048
+          "llama-3.1-70b-instruct":
+            provider-model-id: "meta-llama/llama-3.1-70b-instruct:free"
+            display-name: "Llama 3.1 70B Instruct (Free)"
+            provider: "OPENROUTER"
+            max-input-tokens: 8192
+            max-output-tokens: 4096
+          "gpt-4o-mini":
+            provider-model-id: "openai/gpt-4o-mini"
+            display-name: "GPT-4o Mini"
+            provider: "OPENROUTER"
+            max-input-tokens: 128000
+            max-output-tokens: 16384
+      EMBED:
+        default-model: "text-embedding-3-small"
+        models:
+          "text-embedding-3-small":
+            provider-model-id: "openai/text-embedding-3-small"
+            display-name: "OpenAI text-embedding-3-small"
+            provider: "OPENROUTER"
+            is-default: true
+            max-input-tokens: 8192
+            embedding-dim: 1536
+          "nomic-embed-text-v1.5":
+            provider-model-id: "nomic-ai/nomic-embed-text-v1.5:free"
+            display-name: "Nomic Embed Text v1.5 (Free)"
+            provider: "OPENROUTER"
+            max-input-tokens: 8192
+            embedding-dim: 768
+      RERANK:
+        default-model: "ms-marco-MiniLM-L-6-v2"
+        models:
+          "ms-marco-MiniLM-L-6-v2":
+            provider-model-id: "cross-encoder/ms-marco-MiniLM-L-6-v2"
+            display-name: "MS MARCO MiniLM L-6 v2"
+            provider: "OPENROUTER"
+            is-default: true
+            max-input-tokens: 512
+
+    tenants:
+      "tenant-a":
+        model-overrides:
+          "SYNTHESIZE": "gpt-4o-mini"
+      "tenant-b":
+        model-overrides:
+          "EMBED": "nomic-embed-text-v1.5"
+
   # Configured models. Each entry maps model_id → capabilities.
   # Example:
   # models:

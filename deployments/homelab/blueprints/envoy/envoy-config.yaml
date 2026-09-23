@@ -1,0 +1,128 @@
+# Envoy execution-perimeter config (spec §6, §12; tickets T-K8S-6b/6).
+# - Listener :8080, requires a valid ES256 execution JWT from the Gateway.
+# - JWKS fetched from the Gateway's internal endpoint; cache 5 min (spec §8).
+# - Routes by path prefix to the three vLLM services; 300 s upstream timeout (spec §31).
+#
+# NOTE (tracked in plan §12): jwt_authn verifies signature/iss/aud/exp. The §12
+# request-body-hash claim is NOT enforceable by stock jwt_authn — it needs a Lua/ext
+# filter or Gateway-side enforcement. That gap is a T-K8S-6b acceptance item.
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: envoy-config
+  namespace: gpu-plane
+data:
+  envoy.yaml: |
+    static_resources:
+      listeners:
+        - name: http
+          address:
+            socket_address:
+              address: 0.0.0.0
+              port_value: 8080
+          filter_chains:
+            - filters:
+                - name: envoy.filters.network.http_connection_manager
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                    stat_prefix: execution
+                    route_config:
+                      name: local
+                      virtual_hosts:
+                        - name: gpu-plane
+                          domains: ["*"]
+                          routes:
+                            - match: { prefix: /v1/chat/completions }
+                              route:
+                                cluster: vllm_synthesis
+                                timeout: 300s
+                            - match: { prefix: /v1/embeddings }
+                              route:
+                                cluster: vllm_embedding
+                                timeout: 300s
+                            - match: { prefix: /v1/rerank }
+                              route:
+                                cluster: vllm_reranker
+                                timeout: 300s
+                            - match: { prefix: /v1/score }   # vLLM alias for rerank
+                              route:
+                                cluster: vllm_reranker
+                                timeout: 300s
+                    http_filters:
+                      - name: envoy.filters.http.jwt_authn
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.jwt_authn.v3.JwtAuthentication
+                          providers:
+                            gpu-gateway:
+                              issuer: synanton-gpu-gateway
+                              audiences:
+                                - gpu-plane-execution
+                              remote_jwks:
+                                http_uri:
+                                  uri: http://gpu-gateway:8090/internal/.well-known/jwks.json
+                                  cluster: gpu_gateway
+                                  timeout: 5s
+                                cache_duration:
+                                  seconds: 300   # JWKS cache TTL, spec §8
+                              forward: true
+                          rules:
+                            - match: { prefix: / }
+                              requires:
+                                provider_name: gpu-gateway
+                      - name: envoy.filters.http.router
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+      clusters:
+        - name: gpu_gateway
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: gpu_gateway
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: gpu-gateway
+                          port_value: 8090
+        - name: vllm_synthesis
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: vllm_synthesis
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: vllm-synthesis
+                          port_value: 8000
+        - name: vllm_embedding
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: vllm_embedding
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: vllm-embedding
+                          port_value: 8000
+        - name: vllm_reranker
+          type: STRICT_DNS
+          lb_policy: ROUND_ROBIN
+          load_assignment:
+            cluster_name: vllm_reranker
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: vllm-reranker
+                          port_value: 8000
+    admin:
+      address:
+        socket_address:
+          address: 127.0.0.1
+          port_value: 9901

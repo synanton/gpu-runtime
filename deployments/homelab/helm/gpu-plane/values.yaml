@@ -1,0 +1,75 @@
+# GPU-5 homelab values. Mirrors deployments/homelab/blueprints/.
+# Freeze rule (spec §8): set every image.digest before any acceptance run;
+# when digest is set, templates render repo@digest and ignore tag.
+
+registry: local-registry:5000
+imagePullSecret: local-registry-cred
+runtimeClass: nvidia
+
+images:
+  vllm:
+    repo: vllm-openai
+    tag: v0.29.0 # CUDA 13.0 default build (plan D1)
+    digest: ""
+  envoy:
+    repo: envoy
+    tag: v1.31.0
+    digest: ""
+  postgres:
+    repo: postgres
+    tag: "16.4"
+    digest: ""
+  gateway:
+    repo: gpu-gateway
+    tag: "0.1.0"
+    digest: ""
+
+placement:
+  gatewayNode: node1 # CPU-only
+  envoyNode: node1
+  postgresNode: node1
+  synthesisNode: node2
+  embedRerankNode: node3 # colocated pod (plan D2/D4)
+
+models:
+  synthesis:
+    servedName: synanton-qwen3-4b-synthesis
+    hostPath: /mnt/local-fast/models/qwen3-4b-instruct-2507
+    gpuMemoryUtilization: "0.90"
+    maxModelLen: "32768"
+    maxNumSeqs: "8"
+  embedding:
+    servedName: synanton-qwen3-embedding-0.6b
+    hostPath: /mnt/local-fast/models/qwen3-embedding-0.6b
+    gpuMemoryUtilization: "0.20" # shares node3 GPU with reranker; sum must stay << 1.0
+    maxModelLen: "8192"
+  reranker:
+    servedName: synanton-qwen3-reranker-0.6b
+    hostPath: /mnt/local-fast/models/qwen3-reranker-0.6b # already present on node3 (plan D3)
+    gpuMemoryUtilization: "0.20"
+    maxModelLen: "8192"
+    # required for the official Qwen3-Reranker checkpoint (vLLM PR #19260)
+    hfOverrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
+
+gateway:
+  mode: local-only # §5.3; fail-closed on anything else (§5.5)
+  envoyUrl: http://envoy:8080
+  jdbcUrl: jdbc:postgresql://postgres:5432/gpu_plane
+  terminationGracePeriodSeconds: 45 # §31
+
+envoy:
+  jwksUri: http://gpu-gateway:8090/internal/.well-known/jwks.json
+  jwksCacheSeconds: 300 # §8
+  upstreamTimeoutSeconds: 300 # §31
+  jwtIssuer: synanton-gpu-gateway
+  jwtAudience: gpu-plane-execution
+
+postgres:
+  database: gpu_plane
+  storageSize: 10Gi
+  storageClass: longhorn
+
+secrets:
+  postgresCred: gpu-postgres-cred # created imperatively (plan §7), never committed
+  gatewayPepper: gpu-gateway-pepper
+  gatewayJwtKeys: gpu-gateway-jwt-keys
