@@ -26,11 +26,11 @@ spec:
           imagePullPolicy: IfNotPresent
           env:
             - { name: GPU_DEPLOYMENT_MODE, value: {{ .Values.gateway.mode | quote }} }
-            - { name: GPU_DB_JDBC_URL, value: {{ .Values.gateway.jdbcUrl | quote }} }
-            - name: GPU_DB_USER
+            - { name: GPU_GATEWAY_DB_URL, value: {{ .Values.gateway.jdbcUrl | quote }} }
+            - name: GPU_GATEWAY_DB_USER
               valueFrom:
                 secretKeyRef: { name: {{ .Values.secrets.postgresCred }}, key: POSTGRES_USER }
-            - name: GPU_DB_PASSWORD
+            - name: GPU_GATEWAY_DB_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ .Values.secrets.postgresCred }}, key: POSTGRES_PASSWORD }
             - name: GPU_API_KEY_PEPPER

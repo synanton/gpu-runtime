@@ -6,7 +6,8 @@
 # The important part: every Deployment in the '${NAMESPACE}' namespace is
 # scaled to 0 FIRST, and we wait for those pods to actually terminate,
 # before touching cordon/drain at all. This is what prevents zombie-pod
-# churn: if no pod object exists for vllm-synthesis/vllm-embed-rerank while
+# churn: if no pod object exists for vllm-synthesis/vllm-reranker/
+# tei-embedding while
 # the nodes are down, there is nothing for the scheduler to keep re-placing
 # against a not-yet-healthy GPU device plugin when the nodes come back.
 # Cordon + drain afterwards is just a backstop (everything else on these

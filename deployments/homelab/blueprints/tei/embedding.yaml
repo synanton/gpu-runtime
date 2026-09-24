@@ -1,68 +1,63 @@
-# vLLM synthesis workload — node3, Qwen3-4B-Instruct-2507.
-# One workload per physical GPU (PR #15 review P0.1, plan D2): the newest GPU
-# (RTX 5060 Ti) serves the highest memory-pressure workload (KV cache, long
-# context, concurrency). Model weights via hostPath
-# /mnt/local-fast/models/qwen3-4b-instruct-2507 -> /models (read-only).
-# Pinned to node3 because model storage is node-local (Local Models Setup §8).
+# TEI embedding workload — node1, BAAI/bge-base-en-v1.5 (D2/D4 of gpu-5-implementation-plan.md).
+# One workload per physical GPU (PR #15 review P0.1): this pod is the ONLY
+# nvidia.com/gpu consumer on node1; Gateway/Envoy/PostgreSQL on the same node
+# are CPU-only.
+# TEI "turing" image = sm_7.5 build (GTX 1650); flash-attention auto-disabled
+# on Turing (TEI precision warning). Model weights via hostPath
+# /mnt/local-fast/models/bge-base-en-v1.5 -> /models (read-only, D6).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vllm-synthesis
+  name: tei-embedding
   namespace: gpu-plane
   labels:
-    app: vllm-synthesis
+    app: tei-embedding
 spec:
   replicas: 1
   strategy:
     type: Recreate # single node GPU - a surge pod could never schedule anyway
   selector:
     matchLabels:
-      app: vllm-synthesis
+      app: tei-embedding
   template:
     metadata:
       labels:
-        app: vllm-synthesis
+        app: tei-embedding
     spec:
       runtimeClassName: nvidia
-      nodeName: node3
+      nodeName: node1
       imagePullSecrets:
         - name: local-registry-cred
       containers:
-        - name: vllm
-          image: local-registry:5000/vllm-openai:v0.29.0
+        - name: tei
+          image: local-registry:5000/text-embeddings-inference:turing-1.9
           imagePullPolicy: IfNotPresent
           args:
-            - serve
+            - --model-id
             - /models
             - --served-model-name
-            - synanton-qwen3-4b-synthesis
-            - --host
+            - synanton-bge-base-embedding
+            - --hostname
             - "0.0.0.0"
             - --port
             - "8000"
-            - --gpu-memory-utilization
-            - "0.90"
-            - --max-model-len
-            - "32768"
-            - --max-num-seqs
-            - "8"
+            - --dtype
+            - float16 # Turing has no bf16
           env:
             # weights are local; never phone home to HF at startup
             - name: HF_HUB_OFFLINE
-              value: "1"
-            - name: TRANSFORMERS_OFFLINE
               value: "1"
           ports:
             - containerPort: 8000
           resources:
             requests:
               nvidia.com/gpu: 1
-              cpu: "4"
-              memory: 16Gi
+              cpu: "2"
+              memory: 4Gi
             limits:
               nvidia.com/gpu: 1
-              cpu: "8"
-              memory: 32Gi
+              cpu: "4"
+              memory: 8Gi
           volumeMounts:
             - name: model
               mountPath: /models
@@ -71,32 +66,32 @@ spec:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120 # first-boot kernel autotune can take minutes
-            periodSeconds: 15
+            initialDelaySeconds: 60
+            periodSeconds: 10
             failureThreshold: 10
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 180
+            initialDelaySeconds: 120
             periodSeconds: 30
             failureThreshold: 3
       volumes:
         - name: model
           hostPath:
-            path: /mnt/local-fast/models/qwen3-4b-instruct-2507
+            path: /mnt/local-fast/models/bge-base-en-v1.5
             type: Directory
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: vllm-synthesis
+  name: tei-embedding
   namespace: gpu-plane
 spec:
   selector:
-    app: vllm-synthesis
+    app: tei-embedding
   ports:
     - protocol: TCP
-      port: 8000
+      port: 8000 # uniform cluster addressing (:8000 on every inference Service)
       targetPort: 8000
   type: ClusterIP

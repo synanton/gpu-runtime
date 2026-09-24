@@ -5,17 +5,22 @@ import org.synanton.gpu.v1.Provider;
 import lombok.RequiredArgsConstructor;
 import org.springframework.stereotype.Component;
 
+/**
+ * Legacy convenience facade over {@link ProviderRuntimeRegistry} for the
+ * cancel/reconcile paths, which only know the wire {@link Provider} enum.
+ * New code must route through {@code ProviderRouter} + {@code ProviderRuntimeRegistry}
+ * (PR #15 review §5) — never through a provider-enum special case.
+ */
 @Component
 @RequiredArgsConstructor
 public class RuntimeFactory {
 
     private final VllmRuntime vllmRuntime;
-    private final OpenRouterRuntime openRouterRuntime;
-    private final StubExecutionRuntime stubExecutionRuntime;
+    private final ProviderRuntimeRegistry providerRuntimeRegistry;
 
     public ExecutionRuntime getRuntime(Provider provider) {
         if (provider == Provider.OPENROUTER) {
-            return openRouterRuntime;
+            return providerRuntimeRegistry.get("openrouter").orElse(vllmRuntime);
         }
         return vllmRuntime;
     }

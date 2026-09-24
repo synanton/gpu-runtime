@@ -1,10 +1,19 @@
-# GPU-7 deployment contract (spec §26/§33/§39-§44b). Consumed by the Gateway via
-# GPU_PROVIDER_CONFIG, merged over the bundled application.yml.
+# GPU-7 deployment contract (spec §26/§33/§39-§44b). Mounted into the Gateway and
+# merged over the bundled application.yml via SPRING_CONFIG_ADDITIONAL_LOCATION.
 #
-# The `gpu-gateway.providers` / `gpu-gateway.model-catalog` schema below matches the
-# existing code (OpenRouterRuntime / OpenRouterModelManager / ModelCatalogService).
-# Keys marked [T-K8S-xx] are the GPU-7 ticket additions — startup validation (§5.5)
-# must fail closed on any inconsistency here once those land.
+# Implementation state per key group (PR #15 review — do not claim more than exists):
+#   dispatch.strategy            ENFORCED  — "external" selects provider routing;
+#                                            unknown strategies fail startup (§5.5)
+#   routing.external-enabled     ENFORCED  — kill switch denies all external routing
+#   providers.<id>.api-key/base-url/enabled/circuit-breaker
+#                              ENFORCED  — registry + generic OpenAI-compatible runtime
+#   providers.<id>.health      DECLARED  — bound, but no health scheduler yet (T-K8S-46)
+#   sensitivity / budget / usage.cost-ledger
+#                              DECLARED  — ticket work (T-K8S-48/48b/49); not enforced
+#
+# The model-catalog drives provider selection (logical model → provider + provider
+# model ID). The provider model ID is rewritten into the outbound payload and the
+# logical ID restored on every downstream body, including every SSE chunk.
 
 gpu-gateway:
   dispatch:
@@ -28,7 +37,7 @@ gpu-gateway:
         reset-seconds: 60
     mock:                     # T-K8S-51 acceptance provider (in-compose, plain HTTP
       api-key: ${MOCK_PROVIDER_API_KEY:}  #  inside the compose network only)
-      base-url: http://mock-provider:8080
+      base-url: http://mock-provider:8080/v1   # mock serves /v1/*; runtime appends /<operation path>
       enabled: true
       health:
         path: /healthz
@@ -81,15 +90,18 @@ gpu-gateway:
             is-default: true
             max-input-tokens: 4096
 
-  # [T-K8S-49] sensitivity policy — fail closed; tagged models never route externally
+  # [T-K8S-49] sensitivity policy — DECLARED, not enforced yet (no model tags exist
+  # in the catalog schema). Fail-closed enforcement lands with the ticket.
   sensitivity:
     block-external-tags: [sensitive, pii]
 
-  # [T-K8S-48b] budget enforcement — fail closed; state in PostgreSQL (§33)
+  # [T-K8S-48b] budget enforcement — DECLARED, not enforced yet (needs §33 PostgreSQL
+  # state). Fail-closed enforcement lands with the ticket.
   budget:
     enforcement: enabled
     default-daily-usd: 5.00
 
-  # [T-K8S-48] cost ledger — provider-reported usage is authoritative (§10.2)
+  # [T-K8S-48] cost ledger — DECLARED; provider-reported usage IS captured on every
+  # execution (ExecutionUsage), the ledger/reporting side lands with the ticket.
   usage:
     cost-ledger: enabled

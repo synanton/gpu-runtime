@@ -4,8 +4,12 @@
 #   gpu-gateway-jwt-keys  (ES256 signing keys, file-mounted per §12 - never env vars)
 #   gpu-gateway-pepper    (API-key pepper, §13.2)
 #   gpu-postgres-cred     (shared with the postgres Deployment)
-# NOTE: env var names below are the deployment contract; align with the app's
-# configuration binding during T-K8S-1/4 if the implementation uses different keys.
+# NOTE: env var names below are the deployment contract. Datasource names match
+# the app's actual Spring binding (GPU_GATEWAY_DB_* in application.yml) — the
+# previous GPU_DB_* names silently fell back to localhost:5432 (PR #15 review
+# P0.2). The remaining names (mode/pepper/JWT/Envoy) are the target contract;
+# align with the app's configuration binding during T-K8S-1/4 if the
+# implementation uses different keys.
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -39,14 +43,14 @@ spec:
           env:
             - name: GPU_DEPLOYMENT_MODE
               value: local-only # §5.3; startup fails closed on unsupported values (§5.5)
-            - name: GPU_DB_JDBC_URL
+            - name: GPU_GATEWAY_DB_URL
               value: jdbc:postgresql://postgres:5432/gpu_plane
-            - name: GPU_DB_USER
+            - name: GPU_GATEWAY_DB_USER
               valueFrom:
                 secretKeyRef:
                   name: gpu-postgres-cred
                   key: POSTGRES_USER
-            - name: GPU_DB_PASSWORD
+            - name: GPU_GATEWAY_DB_PASSWORD
               valueFrom:
                 secretKeyRef:
                   name: gpu-postgres-cred

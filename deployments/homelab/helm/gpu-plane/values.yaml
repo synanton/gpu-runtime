@@ -11,6 +11,10 @@ images:
     repo: vllm-openai
     tag: v0.29.0 # CUDA 13.0 default build (plan D1)
     digest: ""
+  tei:
+    repo: text-embeddings-inference
+    tag: turing-1.9 # sm_7.5 build for node1's GTX 1650 (plan D4)
+    digest: ""
   envoy:
     repo: envoy
     tag: v1.31.0
@@ -28,25 +32,25 @@ placement:
   gatewayNode: node1 # CPU-only
   envoyNode: node1
   postgresNode: node1
-  synthesisNode: node2
-  embedRerankNode: node3 # colocated pod (plan D2/D4)
+  embeddingNode: node1 # TEI on the GTX 1650 (one workload per GPU, plan D2)
+  rerankerNode: node2
+  synthesisNode: node3
 
 models:
   synthesis:
     servedName: synanton-qwen3-4b-synthesis
     hostPath: /mnt/local-fast/models/qwen3-4b-instruct-2507
-    gpuMemoryUtilization: "0.90"
+    gpuMemoryUtilization: "0.90" # envelope, not a guarantee (plan §6, review P1.5)
     maxModelLen: "32768"
     maxNumSeqs: "8"
   embedding:
-    servedName: synanton-qwen3-embedding-0.6b
-    hostPath: /mnt/local-fast/models/qwen3-embedding-0.6b
-    gpuMemoryUtilization: "0.20" # shares node3 GPU with reranker; sum must stay << 1.0
-    maxModelLen: "8192"
+    servedName: synanton-bge-base-embedding
+    hostPath: /mnt/local-fast/models/bge-base-en-v1.5
+    dtype: float16 # Turing has no bf16
   reranker:
     servedName: synanton-qwen3-reranker-0.6b
-    hostPath: /mnt/local-fast/models/qwen3-reranker-0.6b # already present on node3 (plan D3)
-    gpuMemoryUtilization: "0.20"
+    hostPath: /mnt/local-fast/models/qwen3-reranker-0.6b # present on node2 (plan D3)
+    gpuMemoryUtilization: "0.40" # dedicated GPU; envelope, not a guarantee
     maxModelLen: "8192"
     # required for the official Qwen3-Reranker checkpoint (vLLM PR #19260)
     hfOverrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'

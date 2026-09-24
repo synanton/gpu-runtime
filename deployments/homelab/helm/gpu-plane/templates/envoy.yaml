@@ -28,7 +28,7 @@ data:
                             - match: { prefix: /v1/chat/completions }
                               route: { cluster: vllm_synthesis, timeout: {{ .Values.envoy.upstreamTimeoutSeconds }}s }
                             - match: { prefix: /v1/embeddings }
-                              route: { cluster: vllm_embedding, timeout: {{ .Values.envoy.upstreamTimeoutSeconds }}s }
+                              route: { cluster: tei_embedding, timeout: {{ .Values.envoy.upstreamTimeoutSeconds }}s }
                             - match: { prefix: /v1/rerank }
                               route: { cluster: vllm_reranker, timeout: {{ .Values.envoy.upstreamTimeoutSeconds }}s }
                             - match: { prefix: /v1/score }
@@ -78,16 +78,16 @@ data:
                   - endpoint:
                       address:
                         socket_address: { address: vllm-synthesis, port_value: 8000 }
-        - name: vllm_embedding
+        - name: tei_embedding
           type: STRICT_DNS
           lb_policy: ROUND_ROBIN
           load_assignment:
-            cluster_name: vllm_embedding
+            cluster_name: tei_embedding
             endpoints:
               - lb_endpoints:
                   - endpoint:
                       address:
-                        socket_address: { address: vllm-embedding, port_value: 8000 }
+                        socket_address: { address: tei-embedding, port_value: 8000 }
         - name: vllm_reranker
           type: STRICT_DNS
           lb_policy: ROUND_ROBIN

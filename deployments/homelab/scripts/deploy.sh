@@ -3,9 +3,11 @@
 # Idempotent (kubectl apply) — safe to re-run after edits.
 #
 # Usage: ./scripts/deploy.sh [phase]
-#   phase: all | scaffolding | postgres | vllm | gateway | envoy | policies
+#   phase: all | scaffolding | postgres | inference | gateway | envoy | policies
+#   (the phase formerly named "vllm" is now "inference" — it also deploys TEI)
 # Secrets (registry cred, postgres cred, JWT keys, pepper) are created
-# imperatively beforehand — see plan §4/§7.
+# imperatively beforehand — see plan §4/§7. Model downloads (plan §4.5) and
+# image mirroring (plan §5) are manual operations, not part of this script.
 set -euo pipefail
 
 ROOT_DIR="$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)"
@@ -23,10 +25,12 @@ postgres() {
   kubectl apply -f "${BP}/postgres/postgres.yaml"
 }
 
-vllm() {
-  echo "== vllm-synthesis (node2) + vllm-embed-rerank (node3)"
+inference() {
+  # one inference workload per physical GPU (plan D2, PR #15 review P0.1)
+  echo "== tei-embedding (node1) + vllm-reranker (node2) + vllm-synthesis (node3)"
+  kubectl apply -f "${BP}/tei/embedding.yaml"
+  kubectl apply -f "${BP}/vllm/reranker.yaml"
   kubectl apply -f "${BP}/vllm/synthesis.yaml"
-  kubectl apply -f "${BP}/vllm/embedding-reranker.yaml"
 }
 
 gateway() {
@@ -46,10 +50,11 @@ policies() {
 }
 
 case "${PHASE}" in
-  all) scaffolding; postgres; vllm; gateway; envoy; policies ;;
+  all) scaffolding; postgres; inference; gateway; envoy; policies ;;
   scaffolding) scaffolding ;;
   postgres) postgres ;;
-  vllm) vllm ;;
+  inference) inference ;;
+  vllm) echo "phase 'vllm' was renamed to 'inference'" >&2; inference ;;
   gateway) gateway ;;
   envoy) envoy ;;
   policies) policies ;;

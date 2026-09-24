@@ -1,7 +1,8 @@
 # Envoy execution-perimeter config (spec §6, §12; tickets T-K8S-6b/6).
 # - Listener :8080, requires a valid ES256 execution JWT from the Gateway.
 # - JWKS fetched from the Gateway's internal endpoint; cache 5 min (spec §8).
-# - Routes by path prefix to the three vLLM services; 300 s upstream timeout (spec §31).
+# - Routes by path prefix to the three inference services (node1 TEI embedding,
+#   node2 vLLM reranker, node3 vLLM synthesis); 300 s upstream timeout (spec §31).
 #
 # NOTE (tracked in plan §12): jwt_authn verifies signature/iss/aud/exp. The §12
 # request-body-hash claim is NOT enforceable by stock jwt_authn — it needs a Lua/ext
@@ -38,7 +39,7 @@ data:
                                 timeout: 300s
                             - match: { prefix: /v1/embeddings }
                               route:
-                                cluster: vllm_embedding
+                                cluster: tei_embedding
                                 timeout: 300s
                             - match: { prefix: /v1/rerank }
                               route:
@@ -97,17 +98,17 @@ data:
                         socket_address:
                           address: vllm-synthesis
                           port_value: 8000
-        - name: vllm_embedding
+        - name: tei_embedding
           type: STRICT_DNS
           lb_policy: ROUND_ROBIN
           load_assignment:
-            cluster_name: vllm_embedding
+            cluster_name: tei_embedding
             endpoints:
               - lb_endpoints:
                   - endpoint:
                       address:
                         socket_address:
-                          address: vllm-embedding
+                          address: tei-embedding
                           port_value: 8000
         - name: vllm_reranker
           type: STRICT_DNS

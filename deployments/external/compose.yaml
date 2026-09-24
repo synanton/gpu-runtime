@@ -49,11 +49,17 @@ services:
       mock-provider:
         condition: service_healthy
     environment:
+      # Datasource: these are the names the app actually binds (application.yml).
+      # The previous GPU_DB_* names silently fell back to localhost:5432 (PR #15 P0.2).
+      GPU_GATEWAY_DB_URL: jdbc:postgresql://postgres:5432/gpu_plane
+      GPU_GATEWAY_DB_USER: gpu
+      GPU_GATEWAY_DB_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      # The external deployment contract is merged over the bundled application.yml.
+      # (GPU_PROVIDER_CONFIG was never read by the app — this is the working mechanism.)
+      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/etc/gpu-gateway/gateway-external.yaml
+      # deployment-contract vars below are wired by the HTTP-face / auth tickets,
+      # not yet read by the current gRPC-only build — kept for contract stability
       GPU_DEPLOYMENT_MODE: external-only # §5.4; anything else must fail closed (§5.5)
-      GPU_PROVIDER_CONFIG: /etc/gpu-gateway/gateway-external.yaml
-      GPU_DB_JDBC_URL: jdbc:postgresql://postgres:5432/gpu_plane
-      GPU_DB_USER: gpu
-      GPU_DB_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
       GPU_API_KEY_PEPPER: ${GPU_API_KEY_PEPPER:?set in .env}
       # provider credentials arrive as env vars referenced from config (§29)
       MOCK_PROVIDER_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
@@ -61,8 +67,10 @@ services:
     volumes:
       - ./config/gateway-external.yaml:/etc/gpu-gateway/gateway-external.yaml:ro
     ports:
-      - "8080:8080" # public API
-      - "127.0.0.1:8091:8091" # health/metrics, localhost only
+      - "9090:9090" # gRPC API (the live surface: Execute/Cancel/GetStatus/GetCapacity/GetModels)
+      - "127.0.0.1:8091:8091" # actuator health/metrics, localhost only
+      # port 8080 (public OpenAI-compatible HTTP face, §5/§10) is NOT exposed by the
+      # current build — it arrives with the HTTP-face ticket; see the plan's status.
     restart: unless-stopped
 
 volumes:

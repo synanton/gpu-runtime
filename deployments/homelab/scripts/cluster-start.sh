@@ -11,8 +11,8 @@
 # and waits for rollouts.
 #
 # GPU-requesting Deployments (anything with a nvidia.com/gpu resource
-# request, detected automatically - currently vllm-synthesis and
-# vllm-embed-rerank) are held at 0 until the nvidia device plugin reports
+# request, detected automatically - currently vllm-synthesis, vllm-reranker
+# and tei-embedding) are held at 0 until the nvidia device plugin reports
 # actually healthy on every worker node. This is the other half of what
 # prevents zombie-pod churn: cluster-stop.sh ensures no pod object exists
 # while the nodes are down, and this script makes sure we don't recreate GPU

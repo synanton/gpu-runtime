@@ -69,20 +69,20 @@ spec:
     - to:
         - podSelector:
             matchExpressions:
-              - { key: app, operator: In, values: [vllm-synthesis, vllm-embed-rerank] }
+              - { key: app, operator: In, values: [vllm-synthesis, vllm-reranker, tei-embedding] }
       ports: [{ protocol: TCP, port: 8000 }]
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: vllm
+  name: inference
 spec:
   podSelector:
     matchExpressions:
-      - { key: app, operator: In, values: [vllm-synthesis, vllm-embed-rerank] }
+      - { key: app, operator: In, values: [vllm-synthesis, vllm-reranker, tei-embedding] }
   policyTypes: [Ingress]
   ingress:
-    # §6: vLLM accepts traffic from Envoy only
+    # §6: inference backends accept traffic from Envoy only
     - from:
         - podSelector:
             matchLabels: { app: envoy }

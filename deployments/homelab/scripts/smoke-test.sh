@@ -5,9 +5,9 @@
 #
 # Usage: ./scripts/smoke-test.sh <synthesis|embed|rerank|envoy|gateway>
 #
-#   synthesis  phase 3 - chat completion against vllm-synthesis (node2)
-#   embed      phase 3 - embeddings against vllm-embedding (node3)
-#   rerank     phase 3 - rerank against vllm-reranker (node3)
+#   synthesis  phase 3 - chat completion against vllm-synthesis (node3)
+#   embed      phase 3 - embeddings against tei-embedding (node1)
+#   rerank     phase 3 - rerank against vllm-reranker (node2)
 #   envoy      phase 5 - NEGATIVE: unsigned request must be rejected (401)
 #   gateway    phase 6+ - GET /v1/models through the Gateway (needs GPU_DEV_API_KEY)
 set -euo pipefail
@@ -41,12 +41,12 @@ case "${CMD}" in
     echo
     ;;
   embed)
-    pid=$(pf vllm-embedding 18001 8000)
+    pid=$(pf tei-embedding 18001 8000)
     trap 'kill "${pid}" 2>/dev/null || true' EXIT
-    echo "-- embeddings (synanton-qwen3-embedding-0.6b)"
+    echo "-- embeddings (synanton-bge-base-embedding, TEI on node1)"
     curl -sf http://localhost:18001/v1/embeddings \
       -H 'Content-Type: application/json' \
-      -d '{"model":"synanton-qwen3-embedding-0.6b","input":"hello"}' | head -c 400
+      -d '{"model":"synanton-bge-base-embedding","input":"hello"}' | head -c 400
     echo
     ;;
   rerank)

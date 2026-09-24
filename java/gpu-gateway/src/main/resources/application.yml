@@ -35,12 +35,13 @@ gpu-gateway:
     cache-dir: ${MODEL_CACHE_DIR:/model-cache}
     registry-base-url: ${MODEL_REGISTRY_URL:http://model-registry:8080}
 
+  # Provider registry: keyed by provider id (openrouter, mock, ...). The model
+  # catalog below is the canonical logical→provider model-ID mapping.
   providers:
     openrouter:
       api-key: ${OPENROUTER_API_KEY:}
       base-url: ${OPENROUTER_BASE_URL:https://openrouter.ai/api/v1}
-      default-model: ${OPENROUTER_DEFAULT_MODEL:}
-      model-mapping: {}
+      enabled: true
 
   model-catalog:
     operations:

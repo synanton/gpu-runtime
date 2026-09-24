@@ -60,20 +60,30 @@ public class ModelCatalogService {
     }
 
     /**
-     * Resolves the provider for a given model and operation.
+     * Resolves the configured provider id (e.g. {@code openrouter}, {@code mock}) for a
+     * logical model under an operation. Returns {@code null} when the model is not
+     * registered for that operation — callers must fail closed, never default.
+     *
+     * <p>Replaces the old proto-enum-based {@code resolveProvider}, which crashed with
+     * {@code IllegalArgumentException} on any provider not in the wire enum (e.g. MOCK)
+     * and silently defaulted to OPENROUTER (PR #15 review P0.3).
      */
-    public Provider resolveProvider(String modelId, Operation operation) {
+    public String resolveProviderId(String modelId, Operation operation) {
         String operationKey = operation.name();
         if (modelCatalog.getOperations().containsKey(operationKey)) {
             GpuGatewayProperties.ModelCatalog.OperationModels opModels =
                     modelCatalog.getOperations().get(operationKey);
             if (opModels.getModels().containsKey(modelId)) {
-                String providerStr = opModels.getModels().get(modelId).getProvider();
-                return Provider.valueOf(providerStr);
+                return opModels.getModels().get(modelId).getProvider();
             }
         }
-        // Default to OPENROUTER for GPU-7
-        return Provider.OPENROUTER;
+        return null;
+    }
+
+    /** True when the logical model is registered under at least one operation. */
+    public boolean isKnownModel(String modelId) {
+        return modelCatalog.getOperations().values().stream()
+                .anyMatch(op -> op.getModels().containsKey(modelId));
     }
 
     /**

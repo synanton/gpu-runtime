@@ -6,7 +6,7 @@ project's `docs/troubleshooting.md` and apply unchanged — same cluster, same
 registry, same device plugin. This file covers only GPU-5-specific failure
 modes. Namespace is `gpu-plane` throughout.
 
-## vLLM pod stuck in `Pending` — `Insufficient nvidia.com/gpu`
+## vLLM/TEI pod stuck in `Pending` — `Insufficient nvidia.com/gpu`
 
 Another GPU pod already holds the node's single `nvidia.com/gpu: 1`. Check:
 
@@ -17,23 +17,33 @@ kubectl get pods -A -o wide --field-selector spec.nodeName=node2   # who owns th
 
 Usual suspect: a `speech` namespace workload left running (`speech-llm` on
 node2, `speech-stt-tts` on node3) — the two projects cannot share a node.
-Scale the speech Deployment to 0 rather than deleting GPU-5 pods.
+Scale the speech Deployment to 0 rather than deleting GPU-5 pods. (Within
+gpu-plane there is exactly one GPU pod per node by design — plan D2.)
 
 ## vLLM pod CrashLoopBackOff / OOM at startup
 
-1. **Colocated pod VRAM overcommit (node3).** `--gpu-memory-utilization` is a
-   fraction of *total* GPU memory per container; if the two values don't sum
-   well below 1.0 the second engine to initialize OOMs. Blueprints ship
-   0.20 + 0.20. Check `kubectl -n gpu-plane logs deploy/vllm-embed-rerank -c reranker --previous`
-   for `CUDA out of memory` and lower further or add `--enforce-eager`.
-2. **Model path wrong.** `hostPath` must point at the *normalized* layout
+1. **Model path wrong.** `hostPath` must point at the *normalized* layout
    `/mnt/local-fast/models/<model>` (plan §4.4). A missing dir yields
    `Directory` type-check failures or vLLM "not a valid model directory" errors.
-   Verify on the node: `ssh node2 ls /mnt/local-fast/models/`.
-3. **Reranker loads but `/v1/rerank` 400s** with `The model does not support
+   Verify on the node: `ssh node3 ls /mnt/local-fast/models/`.
+2. **Reranker loads but `/v1/rerank` 400s** with `The model does not support
    Rerank (Score) API`: the `--hf-overrides` block (sequence-classification
    routing, yes/no logit scoring) is missing or malformed. Compare against
-   `blueprints/vllm/embedding-reranker.yaml`.
+   `blueprints/vllm/reranker.yaml`.
+
+## TEI embedding pod fails on node1
+
+The GTX 1650 is sm_7.5 consumer Turing (no bf16, no tensor cores). Checks:
+
+- Image must be the **turing** variant (`.../text-embeddings-inference:turing-1.9`)
+  — the default TEI image targets Ampere+ and will not run on sm_7.5.
+- Flash attention is auto-disabled on the turing build (upstream precision
+  warning) — do not force-enable it.
+- Model dir must contain tokenizer files, not just weights:
+  `ssh node1 ls /mnt/local-fast/models/bge-base-en-v1.5` (plan §4.5 — a
+  partial download is the known failure mode).
+- If the turing build still misbehaves, fall back per plan D4: bge-small →
+  TEI CPU image on node1.
 
 ## vLLM slow to become Ready after cold boot
 
@@ -58,20 +68,19 @@ envoy — `deploy.sh` phases do this); Gateway's JWT keys Secret missing
 (`gpu-gateway-jwt-keys`, created imperatively per plan §7); JWKS endpoint
 served on the wrong Gateway port (Envoy config targets :8090 `internal`).
 
-## Envoy up but vLLM unreachable (503/UF,upstream_reset)
+## Envoy up but backend unreachable (503/UF,upstream_reset)
 
 Route-to-cluster mapping in `envoy-config` points at Service DNS names
-(`vllm-synthesis`, `vllm-embedding`, `vllm-reranker`). Confirm all three
+(`vllm-synthesis`, `tei-embedding`, `vllm-reranker`). Confirm all three
 Services have endpoints:
 
 ```bash
-kubectl -n gpu-plane get endpoints vllm-synthesis vllm-embedding vllm-reranker
+kubectl -n gpu-plane get endpoints vllm-synthesis tei-embedding vllm-reranker
 ```
 
-Empty endpoints = pods not Ready (see vLLM sections above). The reranker
-Service maps `port: 8000 → targetPort: 8001` — if you edited container ports,
-keep that mapping in sync (both containers share the pod network namespace;
-two :8000 listeners would collide).
+Empty endpoints = pods not Ready (see the vLLM/TEI sections above). All three
+inference Services listen on uniform `:8000` (the retracted colocation's
+8000→8001 port mapping is gone).
 
 ## Gateway not Ready / fails startup validation
 

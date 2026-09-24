@@ -149,17 +149,19 @@ gpu-runtime/
 │
 ├── doc/
 │   ├── GPU-5  GPU-6  GPU-7 Deployment Plan.md   # Canonical deployment spec (v2.1.9)
-│   ├── GPU-5 Local Models Setup.md              # Qwen3 node-local model download/verify
+│   ├── GPU-5 Local Models Setup.md              # Node-local model download/verify (BGE + Qwen3)
 │   ├── TEST_ENVIRONMENT_SETUP.md
 │   ├── GPU Execution Plane Implementation Plan v1.20.md
 │   └── GPU Execution Plane Implementation Plan v1.21.md
 │
 ├── deployments/
 │   ├── homelab/                         # [GPU-5] reference local-inference deployment
-│   │   ├── gpu-5-implementation-plan.md #   phased plan, decisions D1-D6, acceptance
+│   │   ├── gpu-5-implementation-plan.md #   phased plan, decisions D1-D7, acceptance
 │   │   ├── claster-as-build.md          #   observed 4-node cluster inventory
 │   │   ├── blueprints/                  #   plain K8s manifests (phased bring-up)
-│   │   │   ├── vllm/                    #   synthesis (node2), embed+rerank colocated (node3)
+│   │   │   ├── tei/                     #   embedding (node1, GTX 1650, TEI turing build)
+│   │   │   ├── vllm/                    #   reranker (node2), synthesis (node3) — one
+│   │   │   │                            #   workload per physical GPU (PR #15 review)
 │   │   │   ├── postgres/                #   PostgreSQL 16 + Longhorn PVC (node1)
 │   │   │   ├── envoy/                   #   execution perimeter, ES256 JWT via JWKS
 │   │   │   ├── gateway/                 #   Gateway Deployment/Service
@@ -215,28 +217,44 @@ gpu-runtime/
 | GPU-2 | Domain core & persistence | Complete |
 | GPU-3 | Runtime & model lifecycle | Complete |
 | GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
-| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + Qwen3-Embedding/Reranker 0.6B)** | **In progress — deployment package ready, cluster bring-up next** |
-| **GPU-7** | **External-provider profile (OpenAI-compatible adapter, no local GPU)** | **Deployment package defined; adapter partially in flight (OpenRouterRuntime)** |
+| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **In progress — deployment package ready, cluster bring-up next** |
+| **GPU-7** | **External-provider profile (OpenAI-compatible adapter, no local GPU)** | **Routing/runtime layer implemented (PR #15 fixes); HTTP face pending — acceptance blocked** |
 | **GPU-6** | **Production deployment and operational hardening** | **Deferred — not a GPU-5/GPU-7 gate** |
 
-### GPU-5 status (2026-09-23)
+### GPU-5 status (2026-09-24, revised per PR #15 review)
 
 Deployment content lives in [`deployments/homelab/`](deployments/homelab/gpu-5-implementation-plan.md):
 blueprint manifests (kubectl bring-up), `helm/gpu-plane` chart (packaged path), registry/scripts tooling.
 
-- [x] Model files verified on nodes (`/mnt/local-fast/models/...`): Qwen3-4B on node2, embedding+reranker on node3
-- [x] Node placement decided: node1 = CPU-only (Gateway/Envoy/PostgreSQL); node2 = synthesis; node3 = colocated embedding+reranker (one pod, two containers, one shared GPU)
-- [x] vLLM pinned to `v0.29.0` (CUDA 13.0 image matches node1-3 hosts; first release line with Qwen3-Embedding/Reranker support)
-- [ ] Cluster bring-up phases 0–9 (uncordon → registry mirror → postgres → vLLM → gateway → envoy JWT → policies → TLS → acceptance)
+- [x] Node placement: **one inference workload per physical GPU** — node1 = TEI embedding (GTX 1650, BGE-base fp16) + CPU-only Gateway/Envoy/PostgreSQL; node2 = vLLM reranker (RTX 4060 Ti); node3 = vLLM synthesis (RTX 5060 Ti). The two-container/one-GPU colocation was retracted (invalid device-plugin design, PR #15 P0.1).
+- [x] Model files verified on nodes (`/mnt/local-fast/models/...`): reranker on node2, synthesis on node3 (Qwen3ForCausalLM, bf16); `bge-base-en-v1.5` **complete incl. tokenizer files on all nodes** (operator mirrors models everywhere); `bge-small-en-v1.5` fallback partial — one re-run completes it. Manual downloads use a `uv` venv (`uv venv --python 3.12 --seed`) + `HF_ENDPOINT=https://hf-mirror.com` workaround for the huggingface.co SSL EOF failure (plan §4.5, Local Models Setup §4.1)
+- [x] vLLM pinned to `v0.29.0` (CUDA 13.0 image; Ada sm_8.9 + Blackwell sm_12.0); TEI pinned to `turing-1.9` (sm_7.5)
+- [x] GPU-5 manifests fixed per PR #15 review: invalid colocated pod removed; gateway datasource env names aligned to the app's actual `GPU_GATEWAY_DB_*` binding
+- [ ] Cluster bring-up phases 0–9 (uncordon → registry mirror → postgres → inference → gateway → envoy JWT → policies → TLS → acceptance)
 
-### GPU-7 status (2026-09-23)
+### GPU-7 status (2026-09-24, PR #15 review fixes landed)
 
 Deployment package lives in [`deployments/external/`](deployments/external/gpu-7-implementation-plan.md):
 Docker Compose (gateway + PostgreSQL + mock provider), external-mode config contract
-(`config/gateway-external.yaml`, extending the existing `gpu-gateway.providers`/`model-catalog`
-schema with the T-K8S-38..52 ticket keys), smoke test.
-Adapter groundwork exists in `java/gpu-gateway` (`ExternalProviderRuntime` port,
-`OpenRouterRuntime`, `ModelCatalogService`, dispatch strategy `openrouter`).
+(`config/gateway-external.yaml`), smoke test (phase-4 acceptance target).
+
+**Implemented (routing/runtime layer, unit-tested):** provider registry
+(`gpu-gateway.providers.<id>`) + generic `OpenAiProviderRuntime` serving every
+configured provider incl. the mock; authoritative `ProviderRouter` with fail-closed
+startup (§5.5), no-local-fallback in external mode, kill switch, catalog-driven
+provider selection; logical→provider model-ID rewriting with logical ID restored on
+every downstream body **including SSE chunks**; streaming execution in the runtime
+abstraction; per-provider circuit breaker (denies without a provider call);
+Compose↔Spring datasource env fix.
+
+**Declared, not yet enforced:** provider health scheduler (T-K8S-46), budget
+(T-K8S-48b), sensitivity (T-K8S-49), cost-ledger reporting (T-K8S-48), persisted
+routing control state (T-K8S-38).
+
+**Blocked:** §37 acceptance runs against the public HTTP face (`:8080`), which this
+build does not serve yet — the live surface is gRPC :9090. Acceptance remains
+blocked until the HTTP-face ticket lands (see `gpu-7-implementation-plan.md` §0).
+
 Unblocks the platform retrieval benchmark's T02/T03 rows (`platform/docs/research/gpu-plane-integration-tickets.md`)
 once the §37 acceptance paths pass against the mock provider.
 

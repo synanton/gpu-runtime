@@ -32,7 +32,7 @@ import uuid
 PROFILES = {
     "gpu5": {  # deployments/homelab — logical IDs from the GPU-5 plan §2
         "chat": "synanton-qwen3-4b-synthesis",
-        "embed": "synanton-qwen3-embedding-0.6b",
+        "embed": "synanton-bge-base-embedding",
         "rerank": "synanton-qwen3-reranker-0.6b",
         "rerank_supported": True,   # §14: GPU-5 baseline always has a reranker
     },

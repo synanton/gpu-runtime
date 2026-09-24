@@ -1,5 +1,17 @@
 #!/usr/bin/env bash
 # GPU-7 smoke test — positive and negative paths against the Gateway (spec §37 subset).
+#
+# STATUS (PR #15 review): this targets the public OpenAI-compatible HTTP face
+# (:8080 /v1/...), which the current gateway build does NOT serve yet — the live
+# surface today is gRPC :9090 (Execute/Cancel/GetStatus/GetCapacity/GetModels).
+# The routing/runtime layer it exercises (provider registry, mock dispatch,
+# model-ID rewriting, SSE normalization, circuit breaker, kill switch) is
+# implemented and unit-tested in java/gpu-gateway. Run this script once the
+# HTTP-face ticket lands; until then it is the phase-4 acceptance target, not a
+# runnable check.
+#
+# Model IDs below match config/gateway-external.yaml (catalog) — keep in sync.
+#
 # Run from deployments/external/ with the compose stack up:
 #   docker compose up -d && ./scripts/smoke-test.sh
 # Requires: .env sourced (GPU_DEV_API_KEY), curl, python3.
@@ -27,14 +39,14 @@ code() { # method path json-body [extra curl args...]
 
 echo "== positive paths (mock provider)"
 check "models list"            200 "$(code GET  /v1/models)"
-check "chat completions"       200 "$(code POST /v1/chat/completions '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"hi"}]}')"
-check "embeddings"             200 "$(code POST /v1/embeddings '{"model":"synanton-mock-embedding","input":"hello"}')"
-check "rerank (configured)"    200 "$(code POST /v1/rerank '{"model":"synanton-mock-reranker","query":"q","documents":["a","b"]}')"
+check "chat completions"       200 "$(code POST /v1/chat/completions '{"model":"mock-chat-1","messages":[{"role":"user","content":"hi"}]}')"
+check "embeddings"             200 "$(code POST /v1/embeddings '{"model":"mock-embedding-1","input":"hello"}')"
+check "rerank (configured)"    200 "$(code POST /v1/rerank '{"model":"mock-reranker-1","query":"q","documents":["a","b"]}')"
 
 echo "== streaming: [DONE] exactly once, terminal usage present (§10)"
 curl -s -N -X POST "$GW/v1/chat/completions" -H "Authorization: Bearer $KEY" \
   -H 'Content-Type: application/json' \
-  -d '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"hi"}],"stream":true,"stream_options":{"include_usage":true}}' \
+  -d '{"model":"mock-chat-1","messages":[{"role":"user","content":"hi"}],"stream":true,"stream_options":{"include_usage":true}}' \
   > /tmp/gpu7-sse.txt
 [[ "$(grep -c '^data: \[DONE\]$' /tmp/gpu7-sse.txt)" == "1" ]] \
   && { echo "PASS  [DONE] once"; PASS=$((PASS+1)); } || { echo "FAIL  [DONE] count"; FAIL=$((FAIL+1)); }

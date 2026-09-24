@@ -1,8 +1,8 @@
 # NetworkPolicy for gpu-plane (spec §19, T-K8S-11).
 # Default-deny, then allow exactly the §19 flows:
 #   Client -> Gateway (ingress from outside the namespace)
-#   Gateway -> Envoy, Envoy -> vLLM, Gateway -> PostgreSQL, Envoy -> Gateway (JWKS)
-# Direct client access to Envoy/vLLM/PostgreSQL is denied by the default-deny base.
+#   Gateway -> Envoy, Envoy -> inference backends, Gateway -> PostgreSQL, Envoy -> Gateway (JWKS)
+# Direct client access to Envoy/backends/PostgreSQL is denied by the default-deny base.
 # DNS (kube-system) is allowed for everyone.
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
@@ -96,30 +96,30 @@ spec:
               app: gpu-gateway
       ports:
         - { protocol: TCP, port: 8090 }
-    # Envoy -> all three vLLM services
+    # Envoy -> all three inference services (one per GPU node)
     - to:
         - podSelector:
             matchExpressions:
               - key: app
                 operator: In
-                values: [vllm-synthesis, vllm-embed-rerank]
+                values: [vllm-synthesis, vllm-reranker, tei-embedding]
       ports:
         - { protocol: TCP, port: 8000 }
 ---
 apiVersion: networking.k8s.io/v1
 kind: NetworkPolicy
 metadata:
-  name: vllm
+  name: inference
   namespace: gpu-plane
 spec:
   podSelector:
     matchExpressions:
       - key: app
         operator: In
-        values: [vllm-synthesis, vllm-embed-rerank]
+        values: [vllm-synthesis, vllm-reranker, tei-embedding]
   policyTypes: [Ingress]
   ingress:
-    # vLLM accepts traffic from Envoy only (§6: direct access prohibited)
+    # inference backends accept traffic from Envoy only (§6: direct access prohibited)
     - from:
         - podSelector:
             matchLabels:

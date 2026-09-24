@@ -14,7 +14,8 @@ public class GpuGatewayProperties {
     private Dispatch dispatch = new Dispatch();
     private Execution execution = new Execution();
     private Artifacts artifacts = new Artifacts();
-    private Providers providers = new Providers();
+    private Map<String, ProviderConfig> providers = new HashMap<>();
+    private Routing routing = new Routing();
     private ModelCatalog modelCatalog = new ModelCatalog();
     private Map<String, ModelConfig> models = new HashMap<>();
 
@@ -36,27 +37,62 @@ public class GpuGatewayProperties {
         }
     }
 
-    public static class Providers {
-        private OpenRouter openrouter = new OpenRouter();
+    /**
+     * Provider registry (PR #15 review §5): keyed by provider id
+     * ({@code gpu-gateway.providers.<id>}), e.g. {@code openrouter}, {@code mock}.
+     *
+     * <p>Enforced today: {@code api-key}, {@code base-url}, {@code enabled},
+     * {@code circuit-breaker}. Declarative until their tickets land (do not claim
+     * otherwise): {@code health} (T-K8S-46 — no health scheduler yet).
+     */
+    public static class ProviderConfig {
+        private String apiKey;
+        private String baseUrl;
+        private boolean enabled = true;
+        private Health health = new Health();
+        private CircuitBreaker circuitBreaker = new CircuitBreaker();
 
-        public OpenRouter getOpenrouter() { return openrouter; }
-        public void setOpenrouter(OpenRouter openrouter) { this.openrouter = openrouter; }
+        public String getApiKey() { return apiKey; }
+        public void setApiKey(String apiKey) { this.apiKey = apiKey; }
+        public String getBaseUrl() { return baseUrl; }
+        public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public Health getHealth() { return health; }
+        public void setHealth(Health health) { this.health = health; }
+        public CircuitBreaker getCircuitBreaker() { return circuitBreaker; }
+        public void setCircuitBreaker(CircuitBreaker circuitBreaker) { this.circuitBreaker = circuitBreaker; }
 
-        public static class OpenRouter {
-            private String apiKey;
-            private String baseUrl = "https://openrouter.ai/api/v1";
-            private String defaultModel;
-            private Map<String, String> modelMapping = new HashMap<>();
+        /** Declarative (T-K8S-46): bound but not yet acted on by a health scheduler. */
+        public static class Health {
+            private String path;
+            private int intervalSeconds = 60;
 
-            public String getApiKey() { return apiKey; }
-            public void setApiKey(String apiKey) { this.apiKey = apiKey; }
-            public String getBaseUrl() { return baseUrl; }
-            public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
-            public String getDefaultModel() { return defaultModel; }
-            public void setDefaultModel(String defaultModel) { this.defaultModel = defaultModel; }
-            public Map<String, String> getModelMapping() { return modelMapping; }
-            public void setModelMapping(Map<String, String> modelMapping) { this.modelMapping = modelMapping; }
+            public String getPath() { return path; }
+            public void setPath(String path) { this.path = path; }
+            public int getIntervalSeconds() { return intervalSeconds; }
+            public void setIntervalSeconds(int intervalSeconds) { this.intervalSeconds = intervalSeconds; }
         }
+
+        /** Enforced: consecutive provider failures open the circuit; see T-K8S-45. */
+        public static class CircuitBreaker {
+            private int failureThreshold = 5;
+            private int resetSeconds = 60;
+
+            public int getFailureThreshold() { return failureThreshold; }
+            public void setFailureThreshold(int failureThreshold) { this.failureThreshold = failureThreshold; }
+            public int getResetSeconds() { return resetSeconds; }
+            public void setResetSeconds(int resetSeconds) { this.resetSeconds = resetSeconds; }
+        }
+    }
+
+    /** GPU-7 routing controls (§32/§39). */
+    public static class Routing {
+        /** Kill switch: when false, ALL external routing is denied (fail closed). */
+        private boolean externalEnabled = true;
+
+        public boolean isExternalEnabled() { return externalEnabled; }
+        public void setExternalEnabled(boolean externalEnabled) { this.externalEnabled = externalEnabled; }
     }
 
     public static class ModelCatalog {
@@ -167,8 +203,10 @@ public class GpuGatewayProperties {
     public void setExecution(Execution execution) { this.execution = execution; }
     public Artifacts getArtifacts() { return artifacts; }
     public void setArtifacts(Artifacts artifacts) { this.artifacts = artifacts; }
-    public Providers getProviders() { return providers; }
-    public void setProviders(Providers providers) { this.providers = providers; }
+    public Map<String, ProviderConfig> getProviders() { return providers; }
+    public void setProviders(Map<String, ProviderConfig> providers) { this.providers = providers; }
+    public Routing getRouting() { return routing; }
+    public void setRouting(Routing routing) { this.routing = routing; }
     public ModelCatalog getModelCatalog() { return modelCatalog; }
     public void setModelCatalog(ModelCatalog modelCatalog) { this.modelCatalog = modelCatalog; }
     public Map<String, ModelConfig> getModels() { return models; }

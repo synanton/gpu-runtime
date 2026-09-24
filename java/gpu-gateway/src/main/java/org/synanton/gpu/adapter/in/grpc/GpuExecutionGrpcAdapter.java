@@ -8,6 +8,7 @@ import org.synanton.gpu.domain.port.in.GetModelsUseCase;
 import org.synanton.gpu.domain.port.in.GetStatusUseCase;
 import org.synanton.gpu.domain.service.AdmissionService.AdmissionException;
 import org.synanton.gpu.domain.service.IdempotencyService.RequestIdReuseException;
+import org.synanton.gpu.domain.service.RoutingDeniedException;
 import io.grpc.Status;
 import io.grpc.stub.StreamObserver;
 import lombok.RequiredArgsConstructor;
@@ -51,6 +52,20 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
             Execution execution = executeUseCase.execute(request);
             observer.onNext(responseMapper.toExecutionResponse(execution));
             observer.onCompleted();
+        } catch (RoutingDeniedException e) {
+            // Fail-closed routing denial (PR #15 §5): never admitted, never dispatched.
+            // PERMISSION_DENIED covers kill-switch/no-local-fallback; NOT_FOUND covers
+            // unknown model; FAILED_PRECONDITION covers the rest (provider misconfig).
+            Status grpcStatus = switch (e.getCode()) {
+                case "routing_disabled", "no_local_fallback", "provider_unavailable" ->
+                        Status.PERMISSION_DENIED.withDescription(e.getCode() + ": " + e.getMessage());
+                case "model_not_found" ->
+                        Status.NOT_FOUND.withDescription(e.getCode() + ": " + e.getMessage());
+                default ->
+                        Status.FAILED_PRECONDITION.withDescription(e.getCode() + ": " + e.getMessage());
+            };
+            log.warn("Routing denied: code={} request_id={}", e.getCode(), request.getRequestId());
+            observer.onError(grpcStatus.asRuntimeException());
         } catch (RequestIdReuseException e) {
             log.warn("RequestId reuse detected: request_id={}", e.getRequestId());
             observer.onError(Status.INVALID_ARGUMENT

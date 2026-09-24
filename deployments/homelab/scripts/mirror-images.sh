@@ -14,6 +14,7 @@ REGISTRY="${1:-local-registry:5000}"
 # local name -> public image (pinned tags; record digests at freeze, spec §8)
 declare -A IMAGES=(
   [vllm-openai]="vllm/vllm-openai:v0.29.0"        # CUDA 13.0 default build (D1)
+  [text-embeddings-inference]="ghcr.io/huggingface/text-embeddings-inference:turing-1.9" # sm_7.5 build (D4)
   [envoy]="docker.io/envoyproxy/envoy:v1.31.0"
   [postgres]="docker.io/library/postgres:16.4"
   [eclipse-temurin]="docker.io/library/eclipse-temurin:21-jre" # gateway base

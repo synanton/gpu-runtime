@@ -1,30 +1,29 @@
-# vLLM synthesis workload — node3, Qwen3-4B-Instruct-2507.
-# One workload per physical GPU (PR #15 review P0.1, plan D2): the newest GPU
-# (RTX 5060 Ti) serves the highest memory-pressure workload (KV cache, long
-# context, concurrency). Model weights via hostPath
-# /mnt/local-fast/models/qwen3-4b-instruct-2507 -> /models (read-only).
-# Pinned to node3 because model storage is node-local (Local Models Setup §8).
+# vLLM reranker workload — node2, Qwen3-Reranker-0.6B (D2 of gpu-5-implementation-plan.md).
+# One workload per physical GPU (PR #15 review P0.1): dedicated RTX 4060 Ti,
+# uniform :8000 (the retracted colocation's port-8001 hack is gone).
+# Model weights via hostPath /mnt/local-fast/models/qwen3-reranker-0.6b -> /models (read-only).
+# Pinned to node2 because model storage is node-local (Local Models Setup §8).
 apiVersion: apps/v1
 kind: Deployment
 metadata:
-  name: vllm-synthesis
+  name: vllm-reranker
   namespace: gpu-plane
   labels:
-    app: vllm-synthesis
+    app: vllm-reranker
 spec:
   replicas: 1
   strategy:
     type: Recreate # single node GPU - a surge pod could never schedule anyway
   selector:
     matchLabels:
-      app: vllm-synthesis
+      app: vllm-reranker
   template:
     metadata:
       labels:
-        app: vllm-synthesis
+        app: vllm-reranker
     spec:
       runtimeClassName: nvidia
-      nodeName: node3
+      nodeName: node2
       imagePullSecrets:
         - name: local-registry-cred
       containers:
@@ -34,18 +33,22 @@ spec:
           args:
             - serve
             - /models
+            - --runner
+            - pooling
             - --served-model-name
-            - synanton-qwen3-4b-synthesis
+            - synanton-qwen3-reranker-0.6b
             - --host
             - "0.0.0.0"
             - --port
             - "8000"
             - --gpu-memory-utilization
-            - "0.90"
+            - "0.40" # envelope, not a guarantee (plan §6, review P1.5)
             - --max-model-len
-            - "32768"
-            - --max-num-seqs
-            - "8"
+            - "8192"
+            - --hf-overrides
+            # official Qwen3-Reranker checkpoint is Qwen3ForCausalLM; this routes
+            # it to sequence-classification with yes/no logit scoring (vLLM PR #19260)
+            - '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
           env:
             # weights are local; never phone home to HF at startup
             - name: HF_HUB_OFFLINE
@@ -57,12 +60,12 @@ spec:
           resources:
             requests:
               nvidia.com/gpu: 1
-              cpu: "4"
-              memory: 16Gi
+              cpu: "2"
+              memory: 8Gi
             limits:
               nvidia.com/gpu: 1
-              cpu: "8"
-              memory: 32Gi
+              cpu: "4"
+              memory: 16Gi
           volumeMounts:
             - name: model
               mountPath: /models
@@ -84,17 +87,17 @@ spec:
       volumes:
         - name: model
           hostPath:
-            path: /mnt/local-fast/models/qwen3-4b-instruct-2507
+            path: /mnt/local-fast/models/qwen3-reranker-0.6b
             type: Directory
 ---
 apiVersion: v1
 kind: Service
 metadata:
-  name: vllm-synthesis
+  name: vllm-reranker
   namespace: gpu-plane
 spec:
   selector:
-    app: vllm-synthesis
+    app: vllm-reranker
   ports:
     - protocol: TCP
       port: 8000

@@ -25,20 +25,6 @@ public class DomainConfig {
         return endpoint != null ? endpoint : "http://vllm-service:8000";
     }
 
-    /** Provides the OpenRouter base URL. */
-    @Bean
-    public String openRouterBaseUrl(GpuGatewayProperties properties) {
-        String url = properties.getProviders().getOpenrouter().getBaseUrl();
-        return url != null ? url : "https://openrouter.ai/api/v1";
-    }
-
-    /** Provides the OpenRouter API key. */
-    @Bean
-    public String openRouterApiKey(GpuGatewayProperties properties) {
-        String apiKey = properties.getProviders().getOpenrouter().getApiKey();
-        return apiKey != null ? apiKey : "";
-    }
-
     /** Provides the ModelCatalogService for model resolution. */
     @Bean
     public ModelCatalogService modelCatalogService(GpuGatewayProperties properties) {
