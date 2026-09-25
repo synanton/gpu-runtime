@@ -1,6 +1,11 @@
 # GPU-5 Homelab Implementation Plan
 
-**Status:** Contract defined. Implementation complete, including T-K8S-6a (execution-JWT signing, JWKS, static model readiness; §13): verified end to end locally with the real Envoy config (`scripts/envoy-jwt-local-test.sh`, 17/17). On the cluster: phases 0–4 plus the phase 5 negative check are done (§12 item 7). **Next:** the phase 5 cluster run with the new Gateway image and the `gpu-gateway-jwt-keys` Secret (§13.6 step 8), then the PoC baselines (§11). One inference workload per physical GPU.
+**Status:** Contract defined. Implementation complete, including T-K8S-6a (§13). **Cluster phases 0–5 and 7 pass:**
+- **Local end-to-end** test with the real Envoy config: 17/17.
+- **On the cluster**, through Gateway → Envoy (JWT) → GPUs: EMBED, SYNTHESIZE, stream and RERANK succeed.
+- **Negative checks:** unsigned requests get 401, and direct backend access is denied.
+
+**Next:** load baselines (§11, §9), then platform integration (Gateway exposure to the workstation, benchmark principal). One inference workload per physical GPU.
 **Revision date:** 2026-09-25
 **Canonical spec:** `../../doc/GPU-5  GPU-6  GPU-7 Deployment Plan.md`
 **Model setup doc:** `../../doc/GPU-5 Local Models Setup.md` (placement superseded — see D2/D4 below)
@@ -398,17 +403,28 @@ which is formally a GPU-6 ticket — homelab treats the chart as convenience, no
 
 ## 11. Observed baselines (fill in during bring-up)
 
-**PoC status (2026-09-25): no GPU-5 PoC run has been performed yet** — the
-`gpu-plane` namespace is empty. Phases 0–4 and the per-service smoke tests
-(§8.1–8.3) are executable; end-to-end execution through the Gateway waits for
-T-K8S-6a (§12.2). The table below is intentionally blank: values are recorded
-from the actual run per §9 criteria 1–4, never estimated or pre-filled.
+**Status (2026-09-25): phase 5 passed on the cluster; load baselines pending.**
+
+**End to end through the Gateway (mTLS `synanton-platform`)** → Envoy (execution JWT verified) → real GPU backends, single requests:
+
+| Operation | Model | Result | Latency |
+|---|---|---|---|
+| EMBED | bge-base | 2×768 | 166 ms |
+| SYNTHESIZE | Qwen3-4B | "OK" | 91 ms |
+| ExecuteStream | Qwen3-4B | 12 data chunks + 1 terminal | 282 ms |
+| RERANK | Qwen3-Reranker | correct order | 74 ms |
+
+**Perimeter checks:**
+- unsigned request to Envoy → 401;
+- from a non-Envoy pod, TEI, both vLLM backends and the JWKS port are unreachable (NetworkPolicy).
+
+The "used" VRAM below is **idle after model load**, from `nvidia-smi`. The load columns (§9 criteria 1–4) stay blank until a load test is run; they are never estimated.
 
 | Pod | Node | VRAM used / total | Free-VRAM floor under load | Max tested context / concurrency | p50 / p95 | Notes |
 |-----|------|-------------------|----------------------------|----------------------------------|-----------|-------|
-| tei-embedding | node1 | _ / 4096 MiB | _ | 512 tokens / _ | _ | GTX 1650, sm_7.5, fp16 |
-| vllm-reranker | node2 | _ / 16380 MiB | _ | _ / _ | _ | RTX 4060 Ti |
-| vllm-synthesis | node3 | _ / 16311 MiB | _ | _ / _ | _ | RTX 5060 Ti |
+| tei-embedding | node1 | 471 / 4096 MiB (idle) | _ | 512 tokens / _ | single req 166 ms (2 inputs) | GTX 1650, sm_7.5, fp16 |
+| vllm-reranker | node2 | 6229 / 16380 MiB (idle) | _ | _ / _ | single req 74 ms (2 docs) | RTX 4060 Ti; cold start ≈ 1 min |
+| vllm-synthesis | node3 | 13689 / 16311 MiB (idle; `--gpu-memory-utilization 0.90` preallocates KV cache) | _ | 32768 / 8 (configured) | single req 91 ms (2 output tokens) | RTX 5060 Ti; cold start ≈ 4.5 min |
 
 ## 11a. Cluster lifecycle (power off / on)
 
@@ -430,7 +446,7 @@ the best-effort etcd backup on node0.
 ## 12. Known risks / follow-ups
 
 1. **vLLM 0.29.x on consumer GPUs** (D1): first-boot kernel autotune can take minutes; readiness probes use `initialDelaySeconds: 120`, `failureThreshold: 10`.
-2. **Resolved in code (T-K8S-6a, §13); cluster run pending.** *Originally:* Gateway → Envoy is blocked until T-K8S-6a (execution-JWT signing + JWKS on
+2. **Resolved (T-K8S-6a, §13): verified on the cluster 2026-09-25.** *Originally:* Gateway → Envoy is blocked until T-K8S-6a (execution-JWT signing + JWKS on
    :8090) lands: the gateway does not sign JWTs or serve JWKS yet, so Envoy's
    `jwt_authn` fails closed and every local execution is rejected. Phases 0–4 and
    §8.1–8.3 (direct backend smoke) are executable today; end-to-end GPU-5 execution
@@ -560,7 +576,7 @@ same way. **T-K8S-6a alone would not make GPU-5 work end to end, so this fix is 
 | 5 | ✅ Static readiness + signed `/healthz` ping (J3) + tests | — |
 | 6 | ✅ Manifests, Helm, NetworkPolicy, Envoy `forward: false` + `/healthz` (+ JWKS `async_fetch`), §7 commands, troubleshooting | — |
 | 7 | ✅ Local Envoy end-to-end script + run: **17/17** (`scripts/envoy-jwt-local-test.sh`) | Docker pull of the pinned Envoy image |
-| 8 | Cluster Phase 5 run → §11 baselines, status docs (this plan's status, README, spec §1a) | **Operator:** create `gpu-gateway-jwt-keys` (§7), push the Gateway image, run `deploy.sh gateway envoy` |
+| 8 | ✅ Cluster Phase 5 run (2026-09-25: Gateway image digest-pinned `sha256:8a747eb…`, Secret via `scripts/generate-key.sh --apply`; EMBED/SYNTHESIZE/stream/RERANK through Envoy on the GPUs; unsigned→401; direct backend access denied) → §11, status docs | **Operator:** create `gpu-gateway-jwt-keys` (§7), push the Gateway image, run `deploy.sh gateway envoy` |
 
 Steps 1–7 need no GPU and no external provider. After step 8, the platform retrieval
 benchmark's bge-base T02/T03 rows and the reranker rows (T10/T11, `synanton-qwen3-reranker-0.6b`)

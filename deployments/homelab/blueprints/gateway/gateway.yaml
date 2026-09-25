@@ -109,7 +109,8 @@ spec:
       terminationGracePeriodSeconds: 45 # spec §31 (drain budget 30 s < this)
       containers:
         - name: gateway
-          image: local-registry:5000/gpu-gateway:0.1.0
+          # digest-pinned (spec §8): a rebuilt image keeps tag 0.1.0, and IfNotPresent would keep the cached one
+          image: local-registry:5000/gpu-gateway:0.1.0@sha256:8a747eb2c2d77bb7a39d3cb4400746183939d5899829c410c69a67c668e8ef13
           imagePullPolicy: IfNotPresent
           env:
             # names the app binds in application.yml (PR #15 review P0.2/P0.3)

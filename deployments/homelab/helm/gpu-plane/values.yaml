@@ -26,7 +26,7 @@ images:
   gateway:
     repo: gpu-gateway
     tag: "0.1.0"
-    digest: ""
+    digest: "sha256:8a747eb2c2d77bb7a39d3cb4400746183939d5899829c410c69a67c668e8ef13" # T-K8S-6a build; update after every build-and-push.sh (tag is reused)
 
 placement:
   gatewayNode: node1 # CPU-only
