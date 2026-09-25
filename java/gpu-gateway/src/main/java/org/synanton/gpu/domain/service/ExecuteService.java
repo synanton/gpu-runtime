@@ -69,6 +69,12 @@ public class ExecuteService implements ExecuteUseCase {
         // unknown model/provider, disabled provider, local fallback attempt).
         RoutingDecision decision = providerRouter.route(request);
         log.info("Routing decision: {}", decision);
+        // Resolve the external runtime before admission too, so a missing runtime is a
+        // denial — never an admitted execution left dangling in ACCEPTED.
+        ExecutionRuntime externalRuntime = decision.isLocal() ? null
+                : providerRuntimeRegistry.get(decision.providerId())
+                        .orElseThrow(() -> new RoutingDeniedException("provider_unavailable",
+                                "provider '" + decision.providerId() + "' has no runtime"));
 
         // Admission path: serialized per-model inside a PostgreSQL transaction
         Execution admitted = executionAdmissionService.admitAndPersist(request, requestHash);
@@ -78,7 +84,7 @@ public class ExecuteService implements ExecuteUseCase {
 
         return decision.isLocal()
                 ? loadAndDispatchLocal(request, admitted)
-                : dispatchExternal(request, admitted, decision);
+                : dispatchExternal(request, admitted, decision, externalRuntime);
     }
 
     /** Local (GPU-5) path: model load phase + vLLM dispatch. */
@@ -139,12 +145,9 @@ public class ExecuteService implements ExecuteUseCase {
      * and restores the logical ID on every downstream body, including SSE chunks (P1.2).
      */
     private Execution dispatchExternal(ExecutionRequest request, Execution admitted,
-                                       RoutingDecision decision) {
+                                       RoutingDecision decision, ExecutionRuntime runtime) {
         String executionId = admitted.executionId();
 
-        ExecutionRuntime runtime = providerRuntimeRegistry.get(decision.providerId())
-                .orElseThrow(() -> new RoutingDeniedException("provider_unavailable",
-                        "provider '" + decision.providerId() + "' has no runtime"));
         RuntimeTarget target = providerRuntimeRegistry.targetFor(decision);
 
         executionRepository.transitionState(executionId, ExecutionState.ACCEPTED, ExecutionState.QUEUED);

@@ -66,8 +66,9 @@ public class GetStatusService implements GetStatusUseCase {
 
         modelRepository.getCapabilities(execution.modelId()).ifPresentOrElse(
                 capabilities -> {
-                    var target = executionScheduler.schedule(null, capabilities);
-                    var runtimeStatus = runtimeFactory.getDefaultRuntime().ping(execution.executionId(), target);
+                    var binding = runtimeFactory.bindingFor(
+                            execution.runtimeClass(), executionScheduler.schedule(null, capabilities));
+                    var runtimeStatus = binding.runtime().ping(execution.executionId(), binding.target());
 
                     switch (runtimeStatus) {
                         case ALIVE -> {

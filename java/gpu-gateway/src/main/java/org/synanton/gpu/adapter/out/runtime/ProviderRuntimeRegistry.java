@@ -58,9 +58,9 @@ public class ProviderRuntimeRegistry {
         CircuitBreaker breaker = new CircuitBreaker(
                 cb.getFailureThreshold(), Duration.ofSeconds(cb.getResetSeconds()));
 
-        Map<String, String> extraHeaders = "openai".equals(providerId)
-                ? Map.of("HTTP-Referer", "https://synanton.ai", "X-Title", "Synanton GPU Gateway")
-                : Map.of();
+        // Provider-specific headers are configuration (e.g. OpenRouter attribution), never
+        // hard-coded per provider id.
+        Map<String, String> extraHeaders = Map.copyOf(config.getHeaders());
 
         log.info("Provider runtime registered: id={} baseUrl={} (api key {})",
                 providerId, config.getBaseUrl(),

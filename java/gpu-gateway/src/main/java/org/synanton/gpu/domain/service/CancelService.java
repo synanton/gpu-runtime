@@ -46,8 +46,9 @@ public class CancelService implements CancelUseCase {
         // Attempt runtime cancellation — best-effort, no transaction needed
         if (execution.state() == ExecutionState.RUNNING && execution.runtimeClass() != null) {
             modelRepository.getCapabilities(execution.modelId())
-                    .map(caps -> executionScheduler.schedule(null, caps))
-                    .ifPresent(target -> runtimeFactory.getDefaultRuntime().cancel(executionId, target));
+                    .map(caps -> runtimeFactory.bindingFor(
+                            execution.runtimeClass(), executionScheduler.schedule(null, caps)))
+                    .ifPresent(b -> b.runtime().cancel(executionId, b.target()));
         }
 
         ExecutionError cancelError = ExecutionError.nonRetryable("EXECUTION_CANCELLED", "Cancelled by caller");

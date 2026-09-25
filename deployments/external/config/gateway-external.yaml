@@ -29,6 +29,9 @@ gpu-gateway:
       api-key: ${OPENAI_API_KEY:}    # §29: env-var reference, never inline, never logged
       base-url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}   # HTTPS only (§29)
       enabled: ${OPENAI_PROVIDER_ENABLED:false}  # opt-in real arm: needs OPENAI_API_KEY (else denied, not advertised)
+      headers:                # OpenRouter attribution (was hard-coded in the runtime)
+        HTTP-Referer: https://synanton.ai
+        X-Title: Synanton GPU Gateway
       health:                 # [T-K8S-46] tracked independently of Gateway health
         path: /models
         interval-seconds: 60

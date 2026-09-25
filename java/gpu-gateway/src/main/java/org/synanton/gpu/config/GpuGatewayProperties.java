@@ -49,6 +49,8 @@ public class GpuGatewayProperties {
         private String apiKey;
         private String baseUrl;
         private boolean enabled = true;
+        /** Extra request headers sent to this provider (e.g. OpenRouter attribution). */
+        private Map<String, String> headers = new HashMap<>();
         private Health health = new Health();
         private CircuitBreaker circuitBreaker = new CircuitBreaker();
 
@@ -56,6 +58,8 @@ public class GpuGatewayProperties {
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
         public String getBaseUrl() { return baseUrl; }
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public Map<String, String> getHeaders() { return headers; }
+        public void setHeaders(Map<String, String> headers) { this.headers = headers; }
         public boolean isEnabled() { return enabled; }
         public void setEnabled(boolean enabled) { this.enabled = enabled; }
         public Health getHealth() { return health; }
