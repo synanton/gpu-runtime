@@ -56,10 +56,15 @@ models:
     hfOverrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
 
 gateway:
-  mode: local-only # §5.3; fail-closed on anything else (§5.5)
-  envoyUrl: http://envoy:8080
+  strategy: direct # GPU-5 local path; unknown strategies fail startup (Plan §5.5)
+  vllmEndpoint: http://envoy:8080 # Envoy routes by path to the three backends
   jdbcUrl: jdbc:postgresql://postgres:5432/gpu_plane
   terminationGracePeriodSeconds: 45 # §31
+  # admission capabilities per local model (gpu-gateway.models.<id>)
+  concurrency:
+    synthesis: 8
+    embedding: 32
+    reranker: 16
 
 envoy:
   jwksUri: http://gpu-gateway:8090/internal/.well-known/jwks.json
@@ -75,5 +80,4 @@ postgres:
 
 secrets:
   postgresCred: gpu-postgres-cred # created imperatively (plan §7), never committed
-  gatewayPepper: gpu-gateway-pepper
-  gatewayJwtKeys: gpu-gateway-jwt-keys
+  gatewayJwtKeys: gpu-gateway-jwt-keys # reserved for T-K8S-6a (mounted optionally)

@@ -1,6 +1,8 @@
 # Envoy execution-perimeter config (spec §6, §12; tickets T-K8S-6b/6).
 # - Listener :8080, requires a valid ES256 execution JWT from the Gateway.
 # - JWKS fetched from the Gateway's internal endpoint; cache 5 min (spec §8).
+#   NOTE: the Gateway does not serve JWKS/sign JWTs yet (T-K8S-6a pending), so
+#   jwt_authn fails closed and Gateway→Envoy calls are rejected until 6a lands.
 # - Routes by path prefix to the three inference services (node1 TEI embedding,
 #   node2 vLLM reranker, node3 vLLM synthesis); 300 s upstream timeout (spec §31).
 #

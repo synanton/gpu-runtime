@@ -1,3 +1,5 @@
+server:
+  port: 0   # actuator HTTP on an ephemeral port in tests
 gpu-gateway:
   grpc-port: 0
   max-inbound-message-size-bytes: 4259840

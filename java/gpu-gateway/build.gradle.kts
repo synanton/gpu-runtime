@@ -14,6 +14,9 @@ dependencies {
 
     implementation(libs.spring.boot.starter.jdbc)
     implementation(libs.spring.boot.starter.actuator)
+    // Hosts ONLY actuator health/metrics on :8091 (Plan v3.0.0 §4.2). No API controllers:
+    // the API is gRPC synanton.gpu.v1 on :9090.
+    implementation(libs.spring.boot.starter.web)
     implementation(libs.flyway.core)
     implementation(libs.flyway.postgresql)
     implementation(libs.postgresql)

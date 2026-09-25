@@ -20,9 +20,26 @@ import java.util.Optional;
 public class ModelCatalogService {
 
     private final GpuGatewayProperties.ModelCatalog modelCatalog;
+    private final GpuGatewayProperties properties;
 
     public ModelCatalogService(GpuGatewayProperties properties) {
         this.modelCatalog = properties.getModelCatalog();
+        this.properties = properties;
+    }
+
+    /**
+     * Plan §4.4: a model is advertised only if the active deployment can resolve it —
+     * LOCAL models only in local modes; external models only when their provider is
+     * usable (configured, enabled, base URL + credentials). Same rule as ProviderRouter.
+     */
+    boolean isAdvertisable(GpuGatewayProperties.ModelCatalog.OperationModels.ModelInfo info) {
+        String provider = info.getProvider() == null ? "" : info.getProvider().toLowerCase(java.util.Locale.ROOT);
+        boolean external = "external".equals(properties.getDispatch().getStrategy());
+        if ("local".equals(provider)) {
+            return !external;
+        }
+        GpuGatewayProperties.ProviderConfig config = properties.getProviders().get(provider);
+        return config != null && config.isUsable();
     }
 
     /**
@@ -118,12 +135,14 @@ public class ModelCatalogService {
                 String modelId = entry.getKey();
                 GpuGatewayProperties.ModelCatalog.OperationModels.ModelInfo modelInfo = entry.getValue();
 
-                // Filter by provider if specified
-                if (request.getProvider() != Provider.PROVIDER_UNSPECIFIED) {
-                    Provider modelProvider = Provider.valueOf(modelInfo.getProvider());
-                    if (modelProvider != request.getProvider()) {
-                        continue;
-                    }
+                if (!isAdvertisable(modelInfo)) {
+                    continue;
+                }
+                // Filter by provider if specified (name match: configured providers such
+                // as MOCK are not in the wire enum, so Provider.valueOf would throw)
+                if (request.getProvider() != Provider.PROVIDER_UNSPECIFIED
+                        && !request.getProvider().name().equalsIgnoreCase(modelInfo.getProvider())) {
+                    continue;
                 }
 
                 // Check tenant access if tenant_id provided

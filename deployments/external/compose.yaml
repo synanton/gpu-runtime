@@ -68,6 +68,7 @@ services:
       # provider credentials arrive as env vars referenced from config (§29)
       MOCK_PROVIDER_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-} # optional real provider arm
+      OPENAI_PROVIDER_ENABLED: ${OPENAI_PROVIDER_ENABLED:-false}
     volumes:
       - ./config/gateway-external.yaml:/etc/gpu-gateway/gateway-external.yaml:ro
     ports:

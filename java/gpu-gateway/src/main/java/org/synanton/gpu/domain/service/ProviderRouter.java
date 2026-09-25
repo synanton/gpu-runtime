@@ -107,6 +107,11 @@ public class ProviderRouter {
         String providerId = resolveProviderIdChecked(logicalModelId, operation)
                 .toLowerCase(java.util.Locale.ROOT);
 
+        if (RoutingDecision.LOCAL_PROVIDER.equals(providerId)) {
+            // A catalog-LOCAL model can never be served by an external route (invariant 1).
+            throw new RoutingDeniedException("no_local_fallback",
+                    "model '" + logicalModelId + "' is LOCAL; external routing never falls back to local");
+        }
         GpuGatewayProperties.ProviderConfig provider = properties.getProviders().get(providerId);
         if (provider == null) {
             throw new RoutingDeniedException("provider_not_configured",
@@ -116,9 +121,9 @@ public class ProviderRouter {
             throw new RoutingDeniedException("provider_unavailable",
                     "provider '" + providerId + "' is disabled");
         }
-        if (provider.getBaseUrl() == null || provider.getBaseUrl().isBlank()) {
+        if (!provider.isUsable()) {
             throw new RoutingDeniedException("provider_not_configured",
-                    "provider '" + providerId + "' has no base-url");
+                    "provider '" + providerId + "' has no base-url or credentials");
         }
 
         String providerModelId =

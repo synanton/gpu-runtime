@@ -63,6 +63,15 @@ public class GpuGatewayProperties {
         public CircuitBreaker getCircuitBreaker() { return circuitBreaker; }
         public void setCircuitBreaker(CircuitBreaker circuitBreaker) { this.circuitBreaker = circuitBreaker; }
 
+        /** Usable = enabled with base URL and credentials (Plan §4.4, §5.5, §29). */
+        public boolean isUsable() {
+            return enabled && hasText(baseUrl) && hasText(apiKey);
+        }
+
+        private static boolean hasText(String value) {
+            return value != null && !value.isBlank();
+        }
+
         /** Declarative (T-K8S-46): bound but not yet acted on by a health scheduler. */
         public static class Health {
             private String path;

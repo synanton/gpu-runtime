@@ -405,7 +405,14 @@ the best-effort etcd backup on node0.
 ## 12. Known risks / follow-ups
 
 1. **vLLM 0.29.x on consumer GPUs** (D1): first-boot kernel autotune can take minutes; readiness probes use `initialDelaySeconds: 120`, `failureThreshold: 10`.
-2. **Envoy body-hash enforcement** (spec §12): `jwt_authn` validates signature/iss/aud/exp; SHA-256 body-hash claim verification may need a Lua/ext filter — tracked under T-K8S-6b acceptance.
-3. **TEI turing build on GTX 1650** (D4): sm_7.5 consumer card without tensor cores, TEI's turing variant is marked experimental upstream. Phase 3 validates it; fallback ladder is bge-small → TEI CPU on node1. If neither works, embedding moves to node2 (vLLM, Qwen3-Embedding-0.6B — already on disk) and the reranker returns to node1 only if a CPU reranker path is validated — i.e. reopen D2/D4 rather than silently re-colocating.
-4. **Mirrored model copies** (D3/§4.6): models are deliberately mirrored on all nodes (operator practice); the only pure leftover is node2's flat `qwen3-embedding-0.6b`. Harmless either way — hostPath reads only the local copy.
-5. **GPU-7 external profile**: the PR #15 review's remaining blockers (Compose↔Spring datasource env mismatch, mock-provider dispatch, external routing strategy, model-ID rewriting, streaming, expanded acceptance tests) are gateway-code items in `deployments/external/` and the platform `gpu-gateway` module — tracked in PR #15, out of scope for this GPU-5 local-only plan. GPU-5 is unaffected: it runs `local-only` mode with no external dispatch.
+2. **Gateway → Envoy is blocked until T-K8S-6a** (execution-JWT signing + JWKS on
+   :8090) lands: the gateway does not sign JWTs or serve JWKS yet, so Envoy's
+   `jwt_authn` fails closed and every local execution is rejected. Phases 0–4 and
+   §8.1–8.3 (direct backend smoke) are executable today; end-to-end GPU-5 execution
+   through the Gateway is not. The gateway config is complete (strategy `direct`,
+   `vllm-endpoint: http://envoy:8080`, 3 LOCAL catalog entries — verified to boot
+   and advertise exactly the 3 IDs).
+3. **Envoy body-hash enforcement** (spec §12): `jwt_authn` validates signature/iss/aud/exp; SHA-256 body-hash claim verification may need a Lua/ext filter — tracked under T-K8S-6b acceptance.
+4. **TEI turing build on GTX 1650** (D4): sm_7.5 consumer card without tensor cores, TEI's turing variant is marked experimental upstream. Phase 3 validates it; fallback ladder is bge-small → TEI CPU on node1. If neither works, embedding moves to node2 (vLLM, Qwen3-Embedding-0.6B — already on disk) and the reranker returns to node1 only if a CPU reranker path is validated — i.e. reopen D2/D4 rather than silently re-colocating.
+5. **Mirrored model copies** (D3/§4.6): models are deliberately mirrored on all nodes (operator practice); the only pure leftover is node2's flat `qwen3-embedding-0.6b`. Harmless either way — hostPath reads only the local copy.
+6. **GPU-7 external profile**: the PR #15 review's remaining blockers (Compose↔Spring datasource env mismatch, mock-provider dispatch, external routing strategy, model-ID rewriting, streaming, expanded acceptance tests) are gateway-code items in `deployments/external/` and the platform `gpu-gateway` module — tracked in PR #15, out of scope for this GPU-5 local-only plan. GPU-5 is unaffected: it runs `local-only` mode with no external dispatch.

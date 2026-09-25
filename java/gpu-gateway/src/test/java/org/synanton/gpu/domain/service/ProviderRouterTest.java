@@ -184,4 +184,25 @@ class ProviderRouterTest {
         assertThat(decision.endpoint()).isEqualTo("http://vllm-synthesis:8000");
         assertThat(decision.providerModelId()).isEqualTo("synanton-qwen3-4b-synthesis");
     }
+
+    @Test
+    void catalogLocalModelInExternalModeIsNoLocalFallback() {
+        // review §6: "external-only + local model with same name → must not route locally"
+        catalog("SYNTHESIZE", "synanton-qwen3-4b-synthesis", "LOCAL", "synanton-qwen3-4b-synthesis");
+
+        assertThatThrownBy(() -> router.route(request("synanton-qwen3-4b-synthesis", Operation.SYNTHESIZE)))
+                .isInstanceOf(RoutingDeniedException.class)
+                .extracting(e -> ((RoutingDeniedException) e).getCode())
+                .isEqualTo("no_local_fallback");
+    }
+
+    @Test
+    void providerWithoutCredentialsDenied() {
+        provider("mock", "http://mock-provider:8080", "", true);
+
+        assertThatThrownBy(() -> router.route(request("mock-chat-1", Operation.SYNTHESIZE)))
+                .isInstanceOf(RoutingDeniedException.class)
+                .extracting(e -> ((RoutingDeniedException) e).getCode())
+                .isEqualTo("provider_not_configured");
+    }
 }

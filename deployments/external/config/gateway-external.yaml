@@ -28,7 +28,7 @@ gpu-gateway:
     openai:               # existing code schema (OpenAiRuntime)
       api-key: ${OPENAI_API_KEY:}    # §29: env-var reference, never inline, never logged
       base-url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}   # HTTPS only (§29)
-      enabled: true           # [T-K8S-38] persisted control state, survives restart
+      enabled: ${OPENAI_PROVIDER_ENABLED:false}  # opt-in real arm: needs OPENAI_API_KEY (else denied, not advertised)
       health:                 # [T-K8S-46] tracked independently of Gateway health
         path: /models
         interval-seconds: 60

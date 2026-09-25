@@ -1,6 +1,6 @@
 # NetworkPolicy for gpu-plane (spec §19, T-K8S-11).
 # Default-deny, then allow exactly the §19 flows:
-#   Client -> Gateway (ingress from outside the namespace)
+#   Platform -> Gateway gRPC :9090 (ingress from outside the namespace)
 #   Gateway -> Envoy, Envoy -> inference backends, Gateway -> PostgreSQL, Envoy -> Gateway (JWKS)
 # Direct client access to Envoy/backends/PostgreSQL is denied by the default-deny base.
 # DNS (kube-system) is allowed for everyone.
@@ -41,10 +41,11 @@ spec:
       app: gpu-gateway
   policyTypes: [Ingress, Egress]
   ingress:
-    # public API from outside the namespace (clients / Traefik)
+    # gRPC synanton.gpu.v1 from the Platform, outside the namespace (Plan v3.0.0 §4).
+    # Plaintext until mTLS (T-K8S-7/8): this rule is the only exposure control.
     - ports:
-        - { protocol: TCP, port: 8080 }
-    # JWKS from Envoy only
+        - { protocol: TCP, port: 9090 }
+    # JWKS from Envoy only — reserved for T-K8S-6a (endpoint not served yet)
     - from:
         - podSelector:
             matchLabels:

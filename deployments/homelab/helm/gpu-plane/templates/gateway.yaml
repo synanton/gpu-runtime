@@ -1,5 +1,51 @@
-# Gateway — sole public entry point (spec §2.1). Secrets are referenced by name
-# and created imperatively (plan §7); they are never rendered by this chart.
+# Gateway — sole entry point (Plan v3.0.0 §2.1/§4): gRPC synanton.gpu.v1 on :9090,
+# actuator :8091. Mirrors blueprints/gateway/gateway.yaml. Secrets are referenced by
+# name and created imperatively (plan §7); they are never rendered by this chart.
+{{- $m := .Values.models }}
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-gateway-config
+data:
+  gateway-local.yaml: |
+    gpu-gateway:
+      dispatch:
+        strategy: {{ .Values.gateway.strategy }}
+        vllm-endpoint: {{ .Values.gateway.vllmEndpoint }}
+      model-catalog:
+        operations:
+          SYNTHESIZE:
+            default-model: {{ $m.synthesis.servedName }}
+            models:
+              "[{{ $m.synthesis.servedName }}]":
+                provider: LOCAL
+                display-name: "Qwen3-4B-Instruct-2507 (node3, vLLM)"
+                is-default: true
+                max-input-tokens: {{ $m.synthesis.maxModelLen }}
+                max-output-tokens: 8192
+          EMBED:
+            default-model: {{ $m.embedding.servedName }}
+            models:
+              "[{{ $m.embedding.servedName }}]":
+                provider: LOCAL
+                display-name: "BAAI/bge-base-en-v1.5 (node1, TEI)"
+                is-default: true
+                max-input-tokens: 512
+                embedding-dim: 768
+          RERANK:
+            default-model: {{ $m.reranker.servedName }}
+            models:
+              # bracket notation: model IDs may contain dots (Spring map binding)
+              "[{{ $m.reranker.servedName }}]":
+                provider: LOCAL
+                display-name: "Qwen3-Reranker-0.6B (node2, vLLM)"
+                is-default: true
+                max-input-tokens: {{ $m.reranker.maxModelLen }}
+      models:
+        "[{{ $m.synthesis.servedName }}]":  { concurrency-limit: {{ .Values.gateway.concurrency.synthesis }}, max-input-tokens: {{ $m.synthesis.maxModelLen }}, runtime-class: vllm }
+        "[{{ $m.embedding.servedName }}]":  { concurrency-limit: {{ .Values.gateway.concurrency.embedding }}, max-input-tokens: 512, runtime-class: tei }
+        "[{{ $m.reranker.servedName }}]": { concurrency-limit: {{ .Values.gateway.concurrency.reranker }}, max-input-tokens: {{ $m.reranker.maxModelLen }}, runtime-class: vllm }
+---
 apiVersion: apps/v1
 kind: Deployment
 metadata:
@@ -16,6 +62,7 @@ spec:
       annotations:
         prometheus.io/scrape: "true"
         prometheus.io/port: "8091"
+        prometheus.io/path: /actuator/prometheus
     spec:
       nodeName: {{ .Values.placement.gatewayNode }}
       {{- include "gpu-plane.pullSecrets" . | nindent 6 }}
@@ -25,7 +72,6 @@ spec:
           image: {{ include "gpu-plane.image" (list . .Values.images.gateway) }}
           imagePullPolicy: IfNotPresent
           env:
-            - { name: GPU_DEPLOYMENT_MODE, value: {{ .Values.gateway.mode | quote }} }
             - { name: GPU_GATEWAY_DB_URL, value: {{ .Values.gateway.jdbcUrl | quote }} }
             - name: GPU_GATEWAY_DB_USER
               valueFrom:
@@ -33,20 +79,16 @@ spec:
             - name: GPU_GATEWAY_DB_PASSWORD
               valueFrom:
                 secretKeyRef: { name: {{ .Values.secrets.postgresCred }}, key: POSTGRES_PASSWORD }
-            - name: GPU_API_KEY_PEPPER
-              valueFrom:
-                secretKeyRef: { name: {{ .Values.secrets.gatewayPepper }}, key: pepper }
-            - { name: GPU_JWT_KEY_DIR, value: /etc/gpu-gateway/keys }
-            - { name: GPU_ENVOY_URL, value: {{ .Values.gateway.envoyUrl | quote }} }
+            - { name: SPRING_CONFIG_ADDITIONAL_LOCATION, value: "file:/etc/gpu-gateway/config/gateway-local.yaml" }
           ports:
-            - { containerPort: 8080, name: api }
-            - { containerPort: 8090, name: internal }
+            - { containerPort: 9090, name: grpc }
             - { containerPort: 8091, name: metrics }
           resources:
             requests: { cpu: "1", memory: 1Gi }
             limits: { cpu: "4", memory: 4Gi }
           volumeMounts:
-            - { name: jwt-keys, mountPath: /etc/gpu-gateway/keys, readOnly: true }
+            - { name: config, mountPath: /etc/gpu-gateway/config, readOnly: true }
+            - { name: jwt-keys, mountPath: /etc/gpu-gateway/keys, readOnly: true } # reserved: T-K8S-6a
           readinessProbe:
             httpGet: { path: /actuator/health/readiness, port: 8091 }
             initialDelaySeconds: 15
@@ -57,10 +99,13 @@ spec:
             periodSeconds: 15
             failureThreshold: 3
       volumes:
+        - name: config
+          configMap: { name: gpu-gateway-config }
         - name: jwt-keys
           secret:
             secretName: {{ .Values.secrets.gatewayJwtKeys }}
             defaultMode: 0400
+            optional: true
 ---
 apiVersion: v1
 kind: Service
@@ -69,7 +114,6 @@ metadata:
 spec:
   selector: { app: gpu-gateway }
   ports:
-    - { name: api, port: 8080, targetPort: 8080 }
-    - { name: internal, port: 8090, targetPort: 8090 }
+    - { name: grpc, port: 9090, targetPort: 9090 }
     - { name: metrics, port: 8091, targetPort: 8091 }
   type: ClusterIP

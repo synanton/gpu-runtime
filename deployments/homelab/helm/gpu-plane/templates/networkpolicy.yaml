@@ -32,11 +32,11 @@ spec:
     matchLabels: { app: gpu-gateway }
   policyTypes: [Ingress, Egress]
   ingress:
-    - ports: [{ protocol: TCP, port: 8080 }] # public API (clients / Traefik)
+    - ports: [{ protocol: TCP, port: 9090 }] # gRPC synanton.gpu.v1 from the Platform (Plan v3.0.0 §4)
     - from:
         - podSelector:
             matchLabels: { app: envoy }
-      ports: [{ protocol: TCP, port: 8090 }] # JWKS from Envoy only
+      ports: [{ protocol: TCP, port: 8090 }] # JWKS from Envoy only — reserved for T-K8S-6a (not served yet)
     - ports: [{ protocol: TCP, port: 8091 }] # metrics scrape
   egress:
     - to:
