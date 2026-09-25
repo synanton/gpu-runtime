@@ -63,11 +63,20 @@ kubectl -n gpu-plane logs deploy/envoy | grep -i jwks
 kubectl -n gpu-plane get pods -l app=gpu-gateway    # Gateway must be Ready FIRST
 ```
 
-Causes, in order of likelihood: Gateway not ready yet (deploy gateway before
-envoy — `deploy.sh` phases do this); Gateway's JWT keys Secret missing
-(`gpu-gateway-jwt-keys`, created imperatively per plan §7); JWKS endpoint
-and — until T-K8S-6a lands — the Gateway does not serve JWKS at all, so this
-401 is the **expected** fail-closed state (plan §12.2), not a misconfiguration.
+Causes, in order of likelihood:
+1. **Gateway not Ready yet.** Deploy the gateway before Envoy; the `deploy.sh` phases do this. Envoy fetches the JWKS at startup and re-fetches 5 s after a failure, so it recovers without a restart once the Gateway is up.
+2. **Gateway fails to start: JWT keys Secret missing or invalid.** Check `kubectl -n gpu-plane logs deploy/gpu-gateway | grep -i "execution-jwt\|key"`. The Secret `gpu-gateway-jwt-keys` needs `current.key` (PKCS#8, P-256; SEC1 is rejected), `current.pub` and `previous.pub` (plan §7). Only the kids are logged, never key material.
+3. **JWKS not reachable from Envoy:**
+   ```bash
+   kubectl -n gpu-plane exec deploy/envoy -- wget -qO- http://gpu-gateway:8090/internal/.well-known/jwks.json
+   ```
+   Expect two keys. Also check the NetworkPolicy (Envoy → gateway :8090) and the gateway Service port `jwks`.
+4. **Clock skew between node1 and the Gateway pod.** Tokens live 60 s (`execution-jwt.ttl-seconds`), and Envoy allows 60 s of skew.
+
+The Gateway reports these as `execution_jwt_rejected` (non-retryable) in `ErrorInfo.code`.
+
+Unsigned requests (e.g. `smoke-test.sh envoy`) must get 401. That is the expected
+fail-closed behaviour, not a misconfiguration.
 
 ## Envoy up but backend unreachable (503/UF,upstream_reset)
 

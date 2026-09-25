@@ -36,7 +36,7 @@ spec:
     - from:
         - podSelector:
             matchLabels: { app: envoy }
-      ports: [{ protocol: TCP, port: 8090 }] # JWKS from Envoy only — reserved for T-K8S-6a (not served yet)
+      ports: [{ protocol: TCP, port: 8090 }] # JWKS (T-K8S-6a) from Envoy only
     - ports: [{ protocol: TCP, port: 8091 }] # metrics scrape
   egress:
     - to:

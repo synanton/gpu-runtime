@@ -45,7 +45,7 @@ spec:
     # Plaintext until mTLS (T-K8S-7/8): this rule is the only exposure control.
     - ports:
         - { protocol: TCP, port: 9090 }
-    # JWKS from Envoy only — reserved for T-K8S-6a (endpoint not served yet)
+    # JWKS (T-K8S-6a) from Envoy only
     - from:
         - podSelector:
             matchLabels:

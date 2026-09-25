@@ -11,11 +11,11 @@ where, and why. Numbered decisions (D1–D7) live in
 Synanton Platform
    │  gRPC synanton.gpu.v1 (Deployment Plan v3.0.0 §4; mTLS = T-K8S-7/8, pending)
    ▼
-gpu-gateway  (node1, CPU only — :9090 gRPC API, :8091 actuator; JWKS :8090 reserved for T-K8S-6a)
+gpu-gateway  (node1, CPU only — :9090 gRPC API, :8091 actuator; :8090 JWKS for Envoy, T-K8S-6a)
    │  ES256 execution JWT, signed per request (spec §12)
    ▼
-envoy        (node1, CPU only — :8080, jwt_authn verifies against Gateway JWKS;
-              fails closed until T-K8S-6a ships JWT signing/JWKS)
+envoy        (node1, CPU only — :8080, jwt_authn verifies the Gateway's ES256 execution JWT
+              against its JWKS; fails closed; :9902 probe listener)
    │  300 s upstream timeout (spec §31)
    ├─ /v1/chat/completions ─► vllm-synthesis  :8000 (node3, RTX 5060 Ti)
    ├─ /v1/embeddings       ─► tei-embedding   :8000 (node1, GTX 1650 — TEI, fp16)

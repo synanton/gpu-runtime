@@ -267,7 +267,7 @@ Each phase's exit criteria must pass before moving on.
 | 2 | T-K8S-3 | `./scripts/deploy.sh postgres` | Pod Running on node1; `psql` connects via ClusterIP; V1/V2 Flyway migrations applied by first Gateway boot |
 | 3 | T-K8S-5, T-K8S-10 | `./scripts/deploy.sh inference` | All 3 inference pods Running (tei-embedding on node1, vllm-reranker on node2, vllm-synthesis on node3); smoke tests pass (§8.1–8.3) |
 | 4 | T-K8S-4, T-K8S-1a | `./scripts/deploy.sh gateway` — mode `local-only`, model registry → 3 inference services | Gateway ready; startup validation fails closed on bad config; `GetModels` lists the 3 Synanton IDs |
-| 5 | T-K8S-6a, 6b, 6 | ES256 keypair → Secret; `./scripts/deploy.sh envoy` | Unsigned request → 401; Gateway-signed request reaches the backends; direct backend Service access still works only from Envoy (enforced in phase 7) |
+| 5 | T-K8S-6a, 6b, 6 | Keys → Secret `gpu-gateway-jwt-keys` (§7); `./scripts/deploy.sh gateway envoy` | Unsigned request → 401; Gateway-signed request reaches the backends; direct backend Service access still works only from Envoy (enforced in phase 7) |
 | 6 | T-K8S-7, 8 | mTLS + tenant authorization: create the `gpu-gateway-tls` Secret from a self-signed PKI (`doc/GPU Plane mTLS Setup.md` §5); principal `synanton-platform` | Plaintext and foreign-CA clients refused; `tenant_not_allowed` for unauthorized tenants |
 | 7 | T-K8S-11, 12 | `./scripts/deploy.sh policies` | Direct client→backend denied; logs contain no prompts/completions |
 | 8 | T-K8S-9, 9a | Prometheus scrape of Gateway :8091 (`/actuator/prometheus`) | `gpu_gateway_*` metrics visible |
@@ -276,10 +276,18 @@ Each phase's exit criteria must pass before moving on.
 Secrets are created imperatively and never committed (spec §12/§13):
 
 ```bash
-# Phase 5 — execution JWT signing keys (ES256, current + previous slot)
-openssl ecparam -name prime256v1 -genkey -noout -out es256-current.pem
+# Phase 5 — execution JWT signing keys (T-K8S-6a, Plan §12.1): ES256 / P-256, PKCS#8.
+# Exactly two public keys (current + previous); only the current private key is deployed.
+K=git-ignored/gpu5-jwt && mkdir -p "$K" && chmod 700 "$K"
+for k in current previous; do
+  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$K/$k.key"
+  openssl pkey -in "$K/$k.key" -pubout -out "$K/$k.pub"
+done
 kubectl -n gpu-plane create secret generic gpu-gateway-jwt-keys \
-  --from-file=current=es256-current.pem
+  --from-file=current.key="$K/current.key" \
+  --from-file=current.pub="$K/current.pub" --from-file=previous.pub="$K/previous.pub"
+# (openssl ecparam -genkey writes SEC1, which the Gateway rejects; convert with
+#  openssl pkcs8 -topk8 -nocrypt. Keep $K/previous.key offline or delete it.)
 
 # Phase 6 — gRPC mTLS: self-signed PKI (doc/GPU Plane mTLS Setup.md); keep ca.key offline
 deployments/external/scripts/gen-certs.sh git-ignored/gpu5-pki synanton-platform
