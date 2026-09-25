@@ -78,6 +78,11 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
                 .build();
     }
 
+    /** Circuit-breaker state observed by this replica (routing-control visibility). */
+    public boolean isCircuitOpen() {
+        return circuitBreaker.isOpen();
+    }
+
     // ─── ExecutionRuntime (unary) ────────────────────────────────────────────
 
     @Override

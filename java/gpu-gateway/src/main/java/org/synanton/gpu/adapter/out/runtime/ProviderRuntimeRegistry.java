@@ -48,6 +48,12 @@ public class ProviderRuntimeRegistry {
         return Optional.of(runtimes.computeIfAbsent(providerId, id -> build(id, config)));
     }
 
+    /** Circuit state of an already-built provider runtime (false if never used). */
+    public boolean isCircuitOpen(String providerId) {
+        OpenAiProviderRuntime runtime = runtimes.get(providerId);
+        return runtime != null && runtime.isCircuitOpen();
+    }
+
     /** The dispatch target for a routing decision: provider endpoint + provider model ID. */
     public RuntimeTarget targetFor(RoutingDecision decision) {
         return new RuntimeTarget(decision.endpoint(), decision.providerId(), decision.providerModelId());

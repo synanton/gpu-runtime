@@ -6,6 +6,8 @@
 # Usage:
 #   tools/gpu-grpc-call.sh <host:port> <Method> [json-request]
 #     Method: Execute | ExecuteStream | Cancel | GetStatus | GetCapacity | GetModels
+#             or Service/Method for the admin control API, e.g.
+#             GPUControlService/SetExternalRouting (needs an admin principal)
 #
 #   tools/gpu-grpc-call.sh localhost:9090 GetModels '{"operation":"SYNTHESIZE"}'
 #
@@ -47,5 +49,5 @@ if [[ "${BASH_SOURCE[0]}" == "$0" ]]; then
   exec "$GRPCURL" $(tls_flags) ${GRPCURL_EXTRA:-} \
     -import-path "$ROOT/java/gpu-contract/src/main/proto" \
     -proto synanton/gpu/v1/gpu_execution_service.proto \
-    -d "$BODY" "$ADDR" "synanton.gpu.v1.GPUExecutionService/$METHOD"
+    -d "$BODY" "$ADDR" "synanton.gpu.v1.$([[ "$METHOD" == */* ]] && echo "$METHOD" || echo "GPUExecutionService/$METHOD")"
 fi

@@ -387,4 +387,65 @@ class ExternalAcceptanceTest {
                 .extracting(m -> m.getBareMethodName())
                 .containsExactlyInAnyOrder("Execute", "ExecuteStream", "Cancel", "GetStatus", "GetCapacity", "GetModels");
     }
+
+    // ─── T-K8S-38: persisted runtime routing control via GPUControlService ───
+
+    @Test
+    void runtimeKillSwitchViaControlServiceDeniesAndIsPersisted() {
+        var control = GPUControlServiceGrpc.newBlockingStub(channel);
+        try {
+            RoutingControlState off = control.setExternalRouting(SetExternalRoutingRequest.newBuilder()
+                    .setEnabled(false).setReason("acceptance: incident drill").build());
+            assertThat(off.getExternalRoutingEnabled()).isFalse();
+            assertThat(off.getExternalRoutingConfigEnabled()).isTrue();
+
+            int before = hits("good-chat");
+            assertDenied(() -> stub.execute(chat("gpt-4o-shared")), Status.Code.PERMISSION_DENIED, "routing_disabled");
+            assertThat(hits("good-chat")).isEqualTo(before);
+            assertThat(stub.getModels(GetModelsRequest.newBuilder().setOperation(Operation.SYNTHESIZE).build())
+                    .getModelsList()).as("nothing external advertised while the kill switch is off").isEmpty();
+
+            // persisted: the row and its audit trail are in PostgreSQL (survives restarts, shared by replicas)
+            assertThat(jdbc.queryForObject("SELECT enabled FROM routing_control WHERE scope = 'external-routing'",
+                    Boolean.class)).isFalse();
+            assertThat(jdbc.queryForObject("SELECT count(*) FROM routing_control_audit WHERE reason = ?",
+                    Integer.class, "acceptance: incident drill")).isEqualTo(1);
+        } finally {
+            control.setExternalRouting(SetExternalRoutingRequest.newBuilder()
+                    .setEnabled(true).setReason("acceptance: restore").build());
+        }
+        assertThat(stub.execute(chat("gpt-4o-shared")).getState()).isEqualTo(ExecutionState.SUCCESS);
+    }
+
+    @Test
+    void runtimeProviderDisableViaControlService() {
+        var control = GPUControlServiceGrpc.newBlockingStub(channel);
+        try {
+            RoutingControlState state = control.setProviderEnabled(SetProviderEnabledRequest.newBuilder()
+                    .setProviderId("mock").setEnabled(false).setReason("acceptance: provider outage").build());
+            assertThat(state.getProvidersList()).filteredOn(p -> p.getProviderId().equals("mock"))
+                    .singleElement().satisfies(p -> {
+                        assertThat(p.getEnabled()).isFalse();
+                        assertThat(p.getConfigEnabled()).isTrue();
+                        assertThat(p.getReason()).isEqualTo("acceptance: provider outage");
+                    });
+            assertDenied(() -> stub.execute(chat("gpt-4o-shared")), Status.Code.UNAVAILABLE, "provider_unavailable");
+            assertThat(stub.getModels(GetModelsRequest.newBuilder().setOperation(Operation.SYNTHESIZE).build())
+                    .getModelsList()).extracting(ModelInfo::getModelId).doesNotContain("gpt-4o-shared");
+        } finally {
+            control.setProviderEnabled(SetProviderEnabledRequest.newBuilder()
+                    .setProviderId("mock").setEnabled(true).setReason("acceptance: restore").build());
+        }
+    }
+
+    @Test
+    void controlServiceRejectsEnablingWhatConfigurationDisabled() {
+        var control = GPUControlServiceGrpc.newBlockingStub(channel);
+        assertDenied(() -> control.setProviderEnabled(SetProviderEnabledRequest.newBuilder()
+                        .setProviderId("offline").setEnabled(true).setReason("try").build()),
+                Status.Code.FAILED_PRECONDITION, "config_disabled");
+        assertDenied(() -> control.setExternalRouting(SetExternalRoutingRequest.newBuilder()
+                        .setEnabled(false).build()),
+                Status.Code.INVALID_ARGUMENT, "invalid_request"); // reason required
+    }
 }

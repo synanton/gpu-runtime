@@ -43,6 +43,8 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
         "gpu-gateway.security.mode=mtls",
         "gpu-gateway.security.principals.alice.tenants[0]=tenant-a",
         "gpu-gateway.security.principals.bob.tenants[0]=tenant-b",
+        "gpu-gateway.security.principals.carol.tenants[0]=*",
+        "gpu-gateway.security.principals.carol.roles[0]=admin",
         "spring.flyway.enabled=true"
 })
 @Testcontainers
@@ -55,7 +57,7 @@ class MtlsAuthorizationTest {
         try {
             PKI = Files.createTempDirectory("gpu-mtls");
             FOREIGN_PKI = Files.createTempDirectory("gpu-mtls-foreign");
-            genCerts(PKI, "alice", "bob", "stranger");
+            genCerts(PKI, "alice", "bob", "carol", "stranger");
             genCerts(FOREIGN_PKI, "rogue");
         } catch (Exception e) {
             throw new ExceptionInInitializerError(e);
@@ -191,5 +193,28 @@ class MtlsAuthorizationTest {
         assertThatThrownBy(() -> alice.getModels(GetModelsRequest.newBuilder()
                 .setOperation(Operation.SYNTHESIZE).setTenantId("tenant-b").build()))
                 .isInstanceOfSatisfying(StatusRuntimeException.class, e -> assertThat(code(e)).isEqualTo("tenant_not_allowed"));
+    }
+
+    @Test
+    void routingControlRequiresTheAdminRole() throws Exception {
+        String target = "localhost:" + server.getBoundPort();
+        java.util.function.Function<String, GPUControlServiceGrpc.GPUControlServiceBlockingStub> control = cn -> {
+            try {
+                ManagedChannel ch = NettyChannelBuilder.forTarget(target).sslContext(GrpcSslContexts.forClient()
+                        .trustManager(PKI.resolve("ca.crt").toFile())
+                        .keyManager(PKI.resolve(cn + ".crt").toFile(), PKI.resolve(cn + ".key").toFile()).build()).build();
+                channels.add(ch);
+                return GPUControlServiceGrpc.newBlockingStub(ch).withDeadlineAfter(10, TimeUnit.SECONDS);
+            } catch (Exception e) {
+                throw new IllegalStateException(e);
+            }
+        };
+        assertThatThrownBy(() -> control.apply("alice").getRoutingControl(GetRoutingControlRequest.getDefaultInstance()))
+                .isInstanceOfSatisfying(StatusRuntimeException.class, e -> {
+                    assertThat(e.getStatus().getCode()).isEqualTo(Status.Code.PERMISSION_DENIED);
+                    assertThat(code(e)).isEqualTo("role_required");
+                });
+        assertThat(control.apply("carol").getRoutingControl(GetRoutingControlRequest.getDefaultInstance())
+                .getExternalRoutingConfigEnabled()).isTrue();
     }
 }

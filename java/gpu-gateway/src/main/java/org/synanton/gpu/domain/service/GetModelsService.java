@@ -15,9 +15,39 @@ import org.springframework.stereotype.Service;
 public class GetModelsService implements GetModelsUseCase {
 
     private final ModelCatalogService modelCatalogService;
+    private final RoutingControlService routingControl;
 
+    /**
+     * Plan §4.4 with runtime control (T-K8S-38): models of a provider disabled at runtime,
+     * or every external model while the runtime kill switch is off, are not advertised.
+     * Unreadable control state hides external models (fail closed).
+     */
     @Override
     public GetModelsResponse getModels(GetModelsRequest request) {
-        return modelCatalogService.getModels(request);
+        GetModelsResponse all = modelCatalogService.getModels(request);
+        boolean externalOn;
+        try {
+            externalOn = routingControl.externalRoutingEnabled();
+        } catch (RoutingDeniedException e) {
+            externalOn = false;
+        }
+        GetModelsResponse.Builder out = GetModelsResponse.newBuilder();
+        for (var m : all.getModelsList()) {
+            String provider = m.getProvider().toLowerCase(java.util.Locale.ROOT);
+            if ("local".equals(provider)) {
+                out.addModels(m);
+                continue;
+            }
+            boolean visible;
+            try {
+                visible = externalOn && routingControl.providerEnabled(provider);
+            } catch (RoutingDeniedException e) {
+                visible = false;
+            }
+            if (visible) {
+                out.addModels(m);
+            }
+        }
+        return out.build();
     }
 }

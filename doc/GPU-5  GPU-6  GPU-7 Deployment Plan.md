@@ -1127,7 +1127,12 @@ Kill-switch state MUST be persistently represented where required by the deploym
 
 T-K8S-39 owns the external routing kill switch.
 
-**Implementation state (3.0.0):** implemented as configuration — `gpu-gateway.routing.external-enabled: false` denies every external route (`routing_disabled`). The state is persisted in deployment configuration and survives restart; changing it requires a restart. A runtime toggle backed by PostgreSQL is **not implemented** (T-K8S-38).
+**Implementation state:** implemented at two levels. Configuration (`gpu-gateway.routing.external-enabled: false`) is the floor. The **runtime kill switch** is `GPUControlService.SetExternalRouting` (admin role, reason required). It is persisted in PostgreSQL (`routing_control`, audited in `routing_control_audit`), survives restarts, and reaches every replica within 1 s. Either level off → `routing_disabled`; nothing external is advertised. Runtime control cannot enable what configuration disabled (`config_disabled`). Unreadable control state denies external routing (`routing_state_unavailable`).
+
+```bash
+GPU_GRPC_CLIENT=synanton-platform tools/gpu-grpc-call.sh localhost:9090 \
+  GPUControlService/SetExternalRouting '{"enabled":false,"reason":"incident 42"}'
+```
 
 ---
 
@@ -1152,14 +1157,16 @@ T-K8S-38 owns external routing control state.
 
 | Control | Implemented | Where the state lives |
 | --- | --- | --- |
-| Provider enabled/disabled | Yes | configuration (`providers.<id>.enabled`) |
+| Provider enabled/disabled | Yes | configuration floor + runtime `GPUControlService.SetProviderEnabled` (PostgreSQL `routing_control`, audited) |
 | Credentials | Yes | environment → configuration (§29) |
 | Logical model mappings | Yes | configuration (`model-catalog`) |
-| Health | Yes (`ProviderHealthMonitor`, `health.path/interval-seconds/failure-threshold`) | in-memory per replica, re-probed at startup |
-| Circuit breaker | Yes (`circuit-breaker.failure-threshold/reset-seconds`) | in-memory per replica |
+| Health | Yes (`ProviderHealthMonitor`, `health.path/interval-seconds/failure-threshold`) | observed per replica (re-probed at startup); reported by `GetRoutingControl` |
+| Circuit breaker | Yes (`circuit-breaker.failure-threshold/reset-seconds`) | observed per replica; reported by `GetRoutingControl` |
+| Kill switch | Yes | configuration floor + runtime `SetExternalRouting` (PostgreSQL, audited) |
 | Budget | Yes (per-tenant UTC-day limit, `budget.*`) | PostgreSQL `cost_ledger` |
 | Sensitivity policy | Yes (model `tags` + request `data_tags` vs `sensitivity.block-external-tags`) | configuration |
-| Runtime-mutable control state (persisted toggles, persisted breaker/health) | **No** — T-K8S-38 | — |
+| Runtime-mutable control state | Yes — `GPUControlService` (admin role) | PostgreSQL `routing_control` + `routing_control_audit` (V4) |
+| Cross-replica shared health/breaker *decisions* | No — each replica decides from its own observations (by design: a breaker protects the replica's own traffic) | — |
 
 ---
 
@@ -1270,7 +1277,7 @@ The state MUST distinguish:
 
 Control state MUST survive Gateway restart where persistence is required by policy.
 
-**Implementation state (3.0.0):** configuration-backed state (routing enabled, provider enabled, model mappings) survives restart; health and circuit-breaker state are in-memory and rebuilt after restart. A persisted, runtime-mutable control-state store is **not implemented** (see §33).
+**Implementation state:** routing enabled/disabled and provider enabled/disabled are persisted runtime state (PostgreSQL, via `GPUControlService`) layered over configuration, and survive restarts. Model mappings are configuration. Health and circuit-breaker state are observed per replica, rebuilt after a restart, and visible through `GetRoutingControl`.
 
 ---
 

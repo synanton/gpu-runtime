@@ -13,7 +13,7 @@ gpu-gateway:
     slow:    { base-url: "${fake.base}/slow/v1",    api-key: k, circuit-breaker: { failure-threshold: 100 } }
     fragile: { base-url: "${fake.base}/fragile/v1", api-key: k, circuit-breaker: { failure-threshold: 2, reset-seconds: 300 } }
     dead:    { base-url: "http://127.0.0.1:1/v1",   api-key: k, circuit-breaker: { failure-threshold: 100 } }
-    off:     { base-url: "${fake.base}/good/v1",    api-key: k, enabled: false }
+    offline: { base-url: "${fake.base}/good/v1",    api-key: k, enabled: false }
   model-catalog:
     operations:
       SYNTHESIZE:
@@ -25,7 +25,7 @@ gpu-gateway:
           slow-chat:      { provider: SLOW,    provider-model-id: up-slow,    input-usd-per-million: 1, output-usd-per-million: 2 }
           fragile-chat:   { provider: FRAGILE, provider-model-id: up-fragile, input-usd-per-million: 1, output-usd-per-million: 2 }
           dead-chat:      { provider: DEAD,    provider-model-id: up-dead,    input-usd-per-million: 1, output-usd-per-million: 2 }
-          off-chat:       { provider: OFF,     provider-model-id: up-off,     input-usd-per-million: 1, output-usd-per-million: 2 }
+          off-chat:       { provider: OFFLINE, provider-model-id: up-off,     input-usd-per-million: 1, output-usd-per-million: 2 }
           shared-local:   { provider: LOCAL,   provider-model-id: shared-local }
       EMBED:
         default-model: shared-embed

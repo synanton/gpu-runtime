@@ -44,18 +44,39 @@ public class ExternalRoutingPolicy {
     private final ModelCatalogService catalog;
     private final ProviderHealth providerHealth;
     private final CostLedger costLedger;
+    private final RoutingControlService routingControl;
 
+    /** Configuration-only controls (no persisted runtime overrides) — used in unit tests. */
     public ExternalRoutingPolicy(GpuGatewayProperties properties, ModelCatalogService catalog,
                                  ProviderHealth providerHealth, CostLedger costLedger) {
+        this(properties, catalog, providerHealth, costLedger, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public ExternalRoutingPolicy(GpuGatewayProperties properties, ModelCatalogService catalog,
+                                 ProviderHealth providerHealth, CostLedger costLedger,
+                                 RoutingControlService routingControl) {
         this.properties = properties;
         this.catalog = catalog;
         this.providerHealth = providerHealth;
         this.costLedger = costLedger;
+        this.routingControl = routingControl;
     }
 
     public void check(RoutingDecision decision, ExecutionRequest request) {
         if (decision.isLocal()) {
             return;
+        }
+        if (routingControl != null) {
+            // T-K8S-38 persisted runtime overrides (configuration was already applied by the router)
+            if (!routingControl.externalRoutingEnabled()) {
+                throw new RoutingDeniedException("routing_disabled",
+                        "external routing kill switch is OFF (runtime control state)");
+            }
+            if (!routingControl.providerEnabled(decision.providerId())) {
+                throw new RoutingDeniedException("provider_unavailable",
+                        "provider '" + decision.providerId() + "' is disabled (runtime control state)");
+            }
         }
         Set<String> blocked = lower(properties.getSensitivity().getBlockExternalTags());
         if (!blocked.isEmpty()) {

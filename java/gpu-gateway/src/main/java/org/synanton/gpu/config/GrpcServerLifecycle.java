@@ -19,11 +19,14 @@ public class GrpcServerLifecycle implements SmartLifecycle {
 
     private final GpuGatewayProperties properties;
     private final GpuExecutionGrpcAdapter executionAdapter;
+    private final org.synanton.gpu.adapter.in.grpc.GpuControlGrpcAdapter controlAdapter;
 
     public GrpcServerLifecycle(GpuGatewayProperties properties,
-                                GpuExecutionGrpcAdapter executionAdapter) {
+                                GpuExecutionGrpcAdapter executionAdapter,
+                                org.synanton.gpu.adapter.in.grpc.GpuControlGrpcAdapter controlAdapter) {
         this.properties = properties;
         this.executionAdapter = executionAdapter;
+        this.controlAdapter = controlAdapter;
     }
 
     @Override
@@ -34,6 +37,8 @@ public class GrpcServerLifecycle implements SmartLifecycle {
                     .forPort(properties.getGrpcPort())
                     .maxInboundMessageSize(properties.getMaxInboundMessageSizeBytes())
                     .addService(io.grpc.ServerInterceptors.intercept(executionAdapter,
+                            new org.synanton.gpu.adapter.in.grpc.CallerPrincipalInterceptor(security.isMtls())))
+                    .addService(io.grpc.ServerInterceptors.intercept(controlAdapter,
                             new org.synanton.gpu.adapter.in.grpc.CallerPrincipalInterceptor(security.isMtls())));
             if (security.isMtls()) {
                 // Plan §13.1: mTLS — the server presents its certificate and REQUIRES a
