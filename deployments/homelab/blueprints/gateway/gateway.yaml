@@ -35,6 +35,11 @@ data:
           synanton-platform:           # client-certificate CN of the Platform
             tenants: ["*"]
             roles: [admin]
+          synanton-benchmark:          # retrieval benchmark (platform plan §6 Phase B1-K): explicit
+            tenants:                   # tenants only, never "*", no admin role. Certificate:
+              - rb-fixed-g5            #   scripts/issue-client-cert.sh synanton-benchmark
+              - rb-semantic-g5
+              - rb-dryrun-g5
       dispatch:
         strategy: direct
         vllm-endpoint: http://envoy:8080

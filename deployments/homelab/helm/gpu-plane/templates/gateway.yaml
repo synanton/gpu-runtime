@@ -19,6 +19,10 @@ data:
           {{ .Values.gateway.platformPrincipal }}:
             tenants: ["*"]
             roles: [admin]
+          {{- range $cn, $p := .Values.gateway.extraPrincipals }}
+          {{ $cn }}:
+            tenants: {{ toJson $p.tenants }}
+          {{- end }}
       dispatch:
         strategy: {{ .Values.gateway.strategy }}
         vllm-endpoint: {{ .Values.gateway.vllmEndpoint }}
