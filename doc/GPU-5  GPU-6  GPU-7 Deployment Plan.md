@@ -780,6 +780,8 @@ Logs, metrics, traces, and error reporting MUST NOT contain:
 
 T-K8S-12 owns zero-prompt verification.
 
+**Implementation state (GPU-7 path):** verified by `ExternalAcceptanceTest.promptsCompletionsAndCredentialsNeverReachTheLogs`. Prompt and completion canaries go through unary, streaming, embeddings, Responses, provider-failure and sensitivity-denial paths with gateway logging at DEBUG, and the captured logs contain no canary, no provider credential and no provider error body. `deployments/external/scripts/smoke-test.sh` repeats the check against the packaged container's logs. GPU-5 (Envoy/vLLM log levels, rotated logs) remains part of T-K8S-12 bring-up.
+
 Verification MUST cover:
 
 * active logs;

@@ -49,10 +49,13 @@ import static org.assertj.core.api.Assertions.assertThatThrownBy;
  */
 @SpringBootTest(webEnvironment = SpringBootTest.WebEnvironment.NONE)
 @ActiveProfiles("gpu7-acceptance")
+@org.junit.jupiter.api.extension.ExtendWith(org.springframework.boot.test.system.OutputCaptureExtension.class)
 @Testcontainers
 class ExternalAcceptanceTest {
 
     private static final ObjectMapper JSON = new ObjectMapper();
+    private static final String PROMPT_CANARY = "PROMPT-CANARY-9d2e41";
+    private static final String COMPLETION_CANARY = "COMPLETION-CANARY-7f3a0c";
     private static final Map<String, AtomicInteger> HITS = new ConcurrentHashMap<>();
     private static final Map<String, String> LAST_UPSTREAM_MODEL = new ConcurrentHashMap<>();
     private static final HttpServer FAKE;
@@ -186,8 +189,9 @@ class ExternalAcceptanceTest {
             }
             return;
         }
+        String content = body.toString().contains("PROMPT-CANARY") ? COMPLETION_CANARY : "ok";
         respond(ex, 200, "{\"id\":\"c1\",\"object\":\"chat.completion\",\"model\":\"" + model + "\","
-                + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"ok\"}}],"
+                + "\"choices\":[{\"index\":0,\"message\":{\"role\":\"assistant\",\"content\":\"" + content + "\"}}],"
                 + "\"usage\":{\"prompt_tokens\":7,\"completion_tokens\":3}}");
     }
 
@@ -598,5 +602,32 @@ class ExternalAcceptanceTest {
     void unknownResponseIsNotFound() {
         assertDenied(() -> stub.getResponse(GetResponseRequest.newBuilder().setResponseId("resp_nope").build()),
                 Status.Code.NOT_FOUND, "response_not_found");
+    }
+
+    // ─── §20 zero-prompt logging (T-K8S-12, GPU-7 path) ───────────────────────
+
+    @Test
+    void promptsCompletionsAndCredentialsNeverReachTheLogs(
+            org.springframework.boot.test.system.CapturedOutput output) throws Exception {
+        String prompt = "{\"model\":\"gpt-4o-shared\",\"messages\":[{\"role\":\"user\",\"content\":\"" + PROMPT_CANARY + "\"}]}";
+        ExecutionResponse ok = stub.execute(request("gpt-4o-shared", Operation.SYNTHESIZE, prompt).build());
+        assertThat(ok.getResult().toStringUtf8()).as("canary completion really flowed through").contains(COMPLETION_CANARY);
+        stream(request("gpt-4o-shared", Operation.SYNTHESIZE, prompt).build());
+        stub.execute(request("shared-embed", Operation.EMBED,
+                "{\"model\":\"shared-embed\",\"input\":\"" + PROMPT_CANARY + "\"}").build());
+        stub.execute(request("shared-responses", Operation.RESPOND,
+                "{\"model\":\"shared-responses\",\"input\":\"" + PROMPT_CANARY + "\"}").build());
+        stub.execute(request("flaky-chat", Operation.SYNTHESIZE, prompt.replace("gpt-4o-shared", "flaky-chat")).build());
+        try {
+            stub.execute(request("sensitive-chat", Operation.SYNTHESIZE, prompt).build());
+        } catch (StatusRuntimeException expected) {
+            // denial path is logged too
+        }
+
+        String logs = output.getAll();
+        assertThat(logs).as("logging is active at DEBUG for the gateway").contains("Routing decision");
+        assertThat(logs).doesNotContain(PROMPT_CANARY).doesNotContain(COMPLETION_CANARY)
+                .as("provider credentials").doesNotContain("good-key")
+                .as("provider error bodies").doesNotContain("secret upstream stack trace");
     }
 }

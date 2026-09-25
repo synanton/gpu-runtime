@@ -107,6 +107,21 @@ call Execute "$req" >/dev/null
 out="$(call Execute "$(request "$RUN-idem" synanton-mock-chat SYNTHESIZE '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"DIFFERENT"}]}')")"
 [[ "$out" == *InvalidArgument* ]] && ok "request_id reuse with different payload → INVALID_ARGUMENT" || bad "idempotency conflict" "$out"
 
+echo "== zero-prompt logging on the packaged gateway (Plan §20, T-K8S-12)"
+CANARY="SMOKE-PROMPT-CANARY-$RUN"
+call Execute "$(request "$RUN-canary" synanton-mock-chat SYNTHESIZE \
+  "{\"model\":\"synanton-mock-chat\",\"messages\":[{\"role\":\"user\",\"content\":\"$CANARY\"}]}")" >/dev/null
+call Execute "$(request "$RUN-canary-denied" synanton-mock-chat-sensitive SYNTHESIZE \
+  "{\"messages\":[{\"role\":\"user\",\"content\":\"$CANARY\"}]}")" >/dev/null
+if command -v docker >/dev/null && docker compose ps gateway >/dev/null 2>&1; then
+  logs="$(docker compose logs gateway 2>&1)"
+  [[ "$logs" == *"Routing decision"* && "$logs" != *"$CANARY"* ]] \
+    && ok "gateway logs contain no prompt canary" || bad "prompt canary found in gateway logs (or no logs captured)"
+  [[ "$logs" != *"${MOCK_PROVIDER_API_KEY:-__unset__}"* ]] && ok "gateway logs contain no provider API key" || bad "provider key in logs"
+else
+  echo "SKIP  zero-prompt log check (docker compose not available here)"
+fi
+
 if [[ "${SMOKE_REAL_PROVIDER:-0}" == "1" ]]; then
   # Opt-in real external provider arm (OpenRouter FREE models only — the gateway refuses
   # to start otherwise: providers.openai.allowed-model-pattern). Needs OPENAI_API_KEY and
