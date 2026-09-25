@@ -7,38 +7,32 @@
 
 ---
 
-## 0. Status — contract vs. implementation vs. acceptance (PR #15 P2.4)
+## 0. Status — contract vs. implementation vs. acceptance (2026-09-25)
 
-| Layer | State (2026-09-25) |
+| Layer | State |
 | --- | --- |
-| **Deployment contract** | **Defined** — Deployment Plan v3.0.0; transport = gRPC `synanton.gpu.v1` (§4) |
-| **Implementation** | **Complete for the v3.0.0 contract**, except the items listed as not implemented below |
-| **Acceptance (§37, T-K8S-51)** | **Executable and passing** — `ExternalAcceptanceTest` 17/17 (real gRPC, PostgreSQL, fake providers); `scripts/smoke-test.sh` 23/23 against the packaged compose stack, including the live OpenRouter free-model arm |
+| **Deployment contract** | **Defined** — Deployment Plan **v3.1.0**; transport = gRPC `synanton.gpu.v1` over mTLS (§4, §13) |
+| **Implementation** | **Complete for the contract** (table below). Only the §49 freeze attestation (a reviewer sign-off) is outstanding |
+| **Acceptance (§37, T-K8S-51)** | **Passing** — `ExternalAcceptanceTest` (31 cases: real gRPC, PostgreSQL, fake providers); packaged `scripts/smoke-test.sh` (27 mock / 32 with the live arm); live `tools/gpu7-check` (16, OpenRouter free models, zero spend); `tools/gpu7-package-check.py --live` §46 checklist 15/15 |
 
-**Implemented** (`java/gpu-gateway`):
-
-| Control / capability | Ticket | Where |
+| Capability | Ticket / spec | Where |
 | --- | --- | --- |
-| Routing mode `external`, fail-closed startup | T-K8S-44 | `ProviderRouter` |
-| Kill switch (`routing.external-enabled`) | T-K8S-39 | `ProviderRouter` (configuration-backed) |
-| Provider registry, per-provider credentials/headers | T-K8S-40, 43 | `ProviderRuntimeRegistry`, `providers.<id>` |
-| Logical → provider model mapping + rewrite (incl. every stream chunk) | T-K8S-41 | `ProviderRouter` → `OpenAiProviderRuntime` / `SseRelay` |
-| OpenAI-compatible adapter: chat, embeddings, rerank, streaming, usage | T-K8S-42 | `OpenAiProviderRuntime` (mock + OpenRouter) |
-| Circuit breaker | T-K8S-45 | `CircuitBreaker` (in-memory per replica) |
-| Provider health | T-K8S-46 | `ProviderHealthMonitor` |
-| Provider usage + cost ledger | T-K8S-47, 48 | `ExternalRoutingPolicy`, `cost_ledger` (V2) |
-| Budget enforcement | T-K8S-48b | `ExternalRoutingPolicy` (per tenant, UTC day) |
-| Sensitivity policy (model tags + request `data_tags`) | T-K8S-49 | `ExternalRoutingPolicy` |
-| Canonical error mapping (§16) | T-K8S-50 | `ErrorInfo.code`, `x-synanton-error-code` trailer |
-| Provider request-ID preservation | §35 | `upstream_request_id` (V3) |
-| Spend guard for capped keys | — | `providers.<id>.allowed-model-pattern` |
+| mTLS on gRPC; principal (cert CN) → tenant authorization | T-K8S-7/8, §13 | `CallerPrincipalInterceptor`, `CallerAuthorization`, `scripts/gen-certs.sh`, `doc/GPU Plane mTLS Setup.md` |
+| Routing mode `external`, fail-closed startup | T-K8S-44, §5.5 | `ProviderRouter`, `GatewayStartupValidator` |
+| Kill switch — configuration floor + runtime, persisted, audited | T-K8S-39, T-K8S-38 | `GPUControlService`, `RoutingControlService`, V4 |
+| Provider registry, credentials, headers, spend guard | T-K8S-40, 43 | `ProviderRuntimeRegistry`, `allowed-model-pattern` |
+| Logical → provider mapping + rewrite (every chunk/event) | T-K8S-41 | `ProviderRouter` → `OpenAiProviderRuntime` / `SseRelay` |
+| Adapter: chat, embeddings, rerank, streaming, usage | T-K8S-42 | `OpenAiProviderRuntime` |
+| **Responses API**: RESPOND, typed-event streaming, GetResponse/DeleteResponse | §4.6, §10.4 | `ResponsesService`, V5 |
+| Circuit breaker; provider health | T-K8S-45, 46 | `CircuitBreaker`, `ProviderHealthMonitor` |
+| Usage, cost ledger, budget | T-K8S-47, 48, 48b | `ExternalRoutingPolicy`, V2 |
+| Sensitivity (model tags + request `data_tags`) | T-K8S-49 | `ExternalRoutingPolicy` |
+| Canonical errors; upstream request IDs | T-K8S-50, §21/§35 | `ErrorInfo.code`, trailer, V3 |
+| Multi-provider failover (never local, never duplicate) | T-K8S-52, §39a | `routeWithFallbacks`, `ExecuteService` |
+| Zero-prompt logging verified | §20, T-K8S-12 | acceptance test + packaged smoke |
+| Packaging: digest pinning, §46 checklist | T-K8S-53, §8 | `tools/pin-image-digests.sh`, `tools/gpu7-package-check.py` |
 
-**Not implemented** (explicitly out of the current build; nothing in the contract depends on them):
-
-- Runtime-mutable, persisted routing control state — toggles, persisted breaker/health (T-K8S-38); kill switch and provider enablement are configuration and need a restart.
-- mTLS / caller principal validation (T-K8S-7/8): gRPC is plaintext; exposure is limited to localhost (compose) or NetworkPolicy (Plan §13.1).
-- Policy-driven multi-provider selection/failover (T-K8S-52): several providers can be configured, but each catalog model maps to exactly one provider.
-- Responses API — deferred and removed from the contract (Plan §4.6).
+**By design, not implemented:** cross-replica shared health/circuit *decisions* (each replica protects its own traffic; state is visible via `GetRoutingControl`). GPU-6 hardening (HA, certificate rotation automation, CRL/OCSP) is out of scope (§25).
 
 ## 1. What GPU-7 is
 

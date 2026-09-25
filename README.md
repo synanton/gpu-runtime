@@ -145,6 +145,7 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 ├── doc/
 │   ├── GPU-5  GPU-6  GPU-7 Deployment Plan.md   # canonical spec v3.0.0 (gRPC platform transport)
 │   ├── GPU-5 Local Models Setup.md              # node-local model download/verify (uv venv)
+│   ├── GPU Plane mTLS Setup.md                  # self-signed PKI, principals, rotation
 │   ├── TEST_ENVIRONMENT_SETUP.md
 │   └── GPU Execution Plane Implementation Plan v1.20.md / v1.21.md
 │
@@ -172,7 +173,7 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 │       ├── .env.example                   #   secrets template (.env is git-ignored)
 │       ├── config/gateway-external.yaml   #   providers, catalog, kill switch, budget, sensitivity
 │       ├── mock-provider/                 #   stdlib-only OpenAI-compatible mock (T-K8S-51)
-│       └── scripts/smoke-test.sh          #   gRPC acceptance smoke (+ opt-in OpenRouter free arm)
+│       └── scripts/                       #   gen-certs.sh (self-signed mTLS PKI), smoke-test.sh
 │
 ├── java/
 │   ├── gpu-contract/                      # synanton.gpu.v1 — byte-identical mirror of platform
@@ -180,7 +181,8 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 │   └── gpu-gateway/                       # Spring Boot service (gRPC API; actuator only on HTTP)
 │       └── src/main/
 │           ├── java/org/synanton/gpu/
-│           │   ├── adapter/in/grpc/       #   GpuExecutionGrpcAdapter (Execute, ExecuteStream, …)
+│           │   ├── adapter/in/grpc/       #   GpuExecutionGrpcAdapter, GpuControlGrpcAdapter,
+│           │   │                          #   CallerPrincipalInterceptor, CallerAuthorization (mTLS)
 │           │   ├── adapter/out/runtime/   #   VllmRuntime, OpenAiProviderRuntime, SseRelay,
 │           │   │                          #   ProviderRuntimeRegistry, CircuitBreaker, ProviderHealthMonitor
 │           │   ├── adapter/out/database/  #   JdbcExecutionRepository, JdbcCostLedger
@@ -190,10 +192,15 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 │           │   └── config/                #   GpuGatewayProperties, GatewayStartupValidator, gRPC lifecycle
 │           └── resources/
 │               ├── application.yml
-│               └── db/migration/          #   V1 executions, V2 cost_ledger, V3 upstream_request_id
+│               └── db/migration/          #   V1 executions, V2 cost_ledger, V3 upstream_request_id,
+│                                          #   V4 routing_control, V5 responses
 │
 ├── scripts/verify-gpu-contract-mirror.sh  # proto mirror check vs platform (in ./gradlew check)
-├── tools/gpu-grpc-call.sh                 # grpcurl wrapper for the gRPC contract
+├── tools/
+│   ├── gpu-grpc-call.sh                   # grpcurl wrapper (mTLS) for both gRPC services
+│   ├── gpu7-check/                        # live GPU-7 validation, OpenRouter free models only (uv venv)
+│   ├── gpu7-package-check.py              # §46 packaging checklist (T-K8S-53)
+│   └── pin-image-digests.sh               # §8 digest pinning
 └── README.md · LICENSE
 ```
 
@@ -208,20 +215,20 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 | GPU-3 | Runtime & model lifecycle | Complete |
 | GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
 | **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Contract defined; implementation done except execution-JWT (T-K8S-6a); acceptance blocked on T-K8S-6a + PoC run** |
-| **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Contract defined; implemented; §37 acceptance passing** |
+| **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Complete for contract v3.1.0; §37 acceptance passing; freeze attestation pending sign-off** |
 | **GPU-6** | **Production deployment and operational hardening** | **Deferred — not a GPU-5/GPU-7 gate** |
 
 ### Status: contract vs. implementation vs. acceptance (2026-09-25, PR #15)
 
-The platform transport is **gRPC `synanton.gpu.v1`** on :9090 — the contract the
-Platform consumes (Deployment Plan v3.0.0 §4). There is no REST API; actuator
-(health/metrics) runs on :8091.
+The platform transport is **gRPC `synanton.gpu.v1` over mTLS** on :9090 (Deployment
+Plan v3.1.0 §4, §13). There is no REST API; actuator (health/metrics) runs on :8091.
+mTLS setup with self-signed certificates: [`doc/GPU Plane mTLS Setup.md`](doc/GPU%20Plane%20mTLS%20Setup.md).
 
 | | GPU-5 (`deployments/homelab/`) | GPU-7 (`deployments/external/`) |
 | --- | --- | --- |
-| **Deployment contract** | Defined | Defined |
-| **Implementation** | One workload per GPU (node1 TEI embedding, node2 vLLM reranker, node3 vLLM synthesis); Gateway routing ConfigMap; streaming. **Missing:** execution-JWT signing/JWKS (T-K8S-6a), mTLS (T-K8S-7/8) | Provider registry, logical→provider rewrite (incl. stream chunks), streaming, canonical errors, circuit breaker, health, cost ledger, budget, sensitivity, kill switch, upstream request IDs. **Not implemented:** persisted runtime control state (T-K8S-38), mTLS, multi-provider selection policy (T-K8S-52); Responses API deferred |
-| **Acceptance** | **Blocked:** Envoy rejects Gateway→backend calls until T-K8S-6a (fail closed); no PoC run yet. Phases 0–4 + per-service smoke executable | **Passing:** `ExternalAcceptanceTest` 17/17; `scripts/smoke-test.sh` 23/23 on the packaged stack incl. live OpenRouter free models |
+| **Deployment contract** | Defined | Defined (v3.1.0) |
+| **Implementation** | One workload per GPU (node1 TEI embedding, node2 vLLM reranker, node3 vLLM synthesis); Gateway routing ConfigMap; mTLS; streaming. **Missing:** execution-JWT signing/JWKS (T-K8S-6a) | **Complete:** mTLS + tenant authorization, provider registry, logical→provider rewrite, streaming, **Responses API**, canonical errors, circuit breaker, health, cost ledger, budget, sensitivity, kill switch (config + persisted runtime `GPUControlService`), multi-provider failover, upstream request IDs, zero-prompt logging verified, digest-pinned packaging |
+| **Acceptance** | **Blocked:** Envoy rejects Gateway→backend calls until T-K8S-6a (fail closed); no PoC run yet. Phases 0–4 + per-service smoke executable | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md) 16/16 (OpenRouter free models, zero spend); §46 checklist `tools/gpu7-package-check.py --live` 15/15. Freeze attestation (§49) awaits reviewer sign-off |
 
 GPU-5 model state: Qwen3 weights verified; `bge-base-en-v1.5` complete on all nodes
 (mirrored); `bge-small-en-v1.5` fallback complete on all nodes. Manual downloads use a `uv` venv +
