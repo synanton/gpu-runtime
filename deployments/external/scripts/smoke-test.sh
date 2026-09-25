@@ -58,6 +58,8 @@ out="$(call Execute "$(request "$RUN-chat" synanton-mock-chat SYNTHESIZE \
   && ok "chat result never contains provider model ID" || bad "provider ID leaked in chat result"
 [[ "$(field 'int(r.get("usage",{}).get("inputTokens","0"))>0' <<<"$out")" == "True" ]] \
   && ok "provider usage captured" || bad "usage" "$out"
+[[ "$(field 'r.get("upstreamRequestId","")' <<<"$out")" == "$RUN-chat" ]] \
+  && ok "provider request ID preserved (upstream_request_id)" || bad "upstream_request_id" "$out"
 
 out="$(call Execute "$(request "$RUN-embed" synanton-mock-embedding EMBED \
   '{"model":"synanton-mock-embedding","input":"hello"}')")"

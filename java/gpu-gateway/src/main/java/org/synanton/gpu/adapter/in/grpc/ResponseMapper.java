@@ -31,6 +31,9 @@ class ResponseMapper {
         if (execution.usage() != null) {
             builder.setUsage(mapUsage(execution, execution.usage()));
         }
+        if (execution.upstreamRequestId() != null) {
+            builder.setUpstreamRequestId(execution.upstreamRequestId());
+        }
         return builder.build();
     }
 
@@ -45,6 +48,9 @@ class ResponseMapper {
         }
         if (execution.usage() != null) {
             builder.setUsage(mapUsage(execution, execution.usage()));
+        }
+        if (execution.upstreamRequestId() != null) {
+            builder.setUpstreamRequestId(execution.upstreamRequestId());
         }
         return builder.build();
     }

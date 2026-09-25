@@ -76,4 +76,14 @@ class ModelCatalogServiceTest {
 
         assertThat(models).extracting(ModelInfo::getModelId).containsExactly("synanton-qwen3-4b-synthesis");
     }
+
+    @Test
+    void entriesWithoutDisplayNameAreAdvertisedUnderTheirModelId() {
+        // regression: protobuf setDisplayName(null) threw NPE → GetModels INTERNAL
+        GpuGatewayProperties p = properties("external");
+        p.getModelCatalog().getOperations().get("SYNTHESIZE").getModels().get("synanton-mock-chat").setDisplayName(null);
+
+        assertThat(models(p, Provider.PROVIDER_UNSPECIFIED))
+                .extracting(ModelInfo::getDisplayName).containsExactly("synanton-mock-chat");
+    }
 }

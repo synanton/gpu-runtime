@@ -85,7 +85,7 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
         long startMs = System.currentTimeMillis();
         try {
             byte[] payload = rewritePayloadForProvider(request, target, false);
-            HttpRequest httpRequest = buildRequest(target, request.getOperation(), payload, false);
+            HttpRequest httpRequest = buildRequest(target, request, payload, false);
 
             circuitBreaker.beforeCall();
             HttpResponse<String> response =
@@ -134,7 +134,7 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             } catch (IOException e) {
                 throw new ModelRewriteException("payload is not valid JSON");
             }
-            HttpRequest httpRequest = buildRequest(target, request.getOperation(), payload, true);
+            HttpRequest httpRequest = buildRequest(target, request, payload, true);
 
             circuitBreaker.beforeCall();
             HttpResponse<java.util.stream.Stream<String>> response =
@@ -170,7 +170,8 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             }
             circuitBreaker.onSuccess();
             // usage == null → authoritative usage unavailable: leave it unset (§10.2), never zero
-            return new RuntimeResult.Success(outcome.usage(), new byte[0]);
+            return new RuntimeResult.Success(outcome.usage(), new byte[0],
+                    upstreamRequestId(response.headers(), null));
 
         } catch (CircuitBreaker.CircuitOpenException e) {
             return failure("circuit_open", "provider '" + providerId + "' circuit is open",
@@ -224,10 +225,12 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
 
     // ─── internals ───────────────────────────────────────────────────────────
 
-    private HttpRequest buildRequest(RuntimeTarget target, Operation operation,
+    private HttpRequest buildRequest(RuntimeTarget target, ExecutionRequest request,
                                      byte[] payload, boolean streaming) {
         HttpRequest.Builder builder = HttpRequest.newBuilder()
-                .uri(URI.create(resolveEndpoint(target.endpointUrl(), operation)))
+                .uri(URI.create(resolveEndpoint(target.endpointUrl(), request.getOperation())))
+                // §21: the Platform's request_id travels upstream for correlation
+                .header("x-request-id", request.getRequestId())
                 .header("Content-Type", "application/json")
                 .POST(HttpRequest.BodyPublishers.ofByteArray(payload))
                 .timeout(requestTimeout);
@@ -334,11 +337,22 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             circuitBreaker.onSuccess();
             restoreLogicalModelId(body, request.getModel());
             ExecutionUsage usage = extractUsage(body, durationMs);
-            return new RuntimeResult.Success(usage, objectMapper.writeValueAsBytes(body));
+            return new RuntimeResult.Success(usage, objectMapper.writeValueAsBytes(body),
+                    upstreamRequestId(response.headers(), body.path("id").asText(null)));
         } catch (Exception e) {
             return failure("upstream_provider_error", "unparseable provider response",
                     false, RetryDisposition.COMPLETED_UNKNOWN);
         }
+    }
+
+    /**
+     * §35 provider request-ID preservation: the provider's {@code x-request-id} response
+     * header when present, else the response body {@code id} (e.g. OpenRouter's gen-… ID).
+     */
+    private static String upstreamRequestId(java.net.http.HttpHeaders headers, String bodyId) {
+        return headers.firstValue("x-request-id")
+                .or(() -> headers.firstValue("x-generation-id"))
+                .orElse(bodyId);
     }
 
     private ExecutionUsage extractUsage(JsonNode body, long durationMs) {

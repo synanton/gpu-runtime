@@ -203,7 +203,7 @@ public class ExecuteService implements ExecuteUseCase {
         return switch (result) {
             case ExecutionRuntime.RuntimeResult.Success success -> {
                 executionRepository.completeSuccess(
-                        executionId, success.usage(), success.result());
+                        executionId, success.usage(), success.result(), success.upstreamRequestId());
                 log.info("Execution succeeded: execution_id={}", executionId);
                 yield executionRepository.findByExecutionId(executionId)
                         .orElseThrow(() -> new IllegalStateException(

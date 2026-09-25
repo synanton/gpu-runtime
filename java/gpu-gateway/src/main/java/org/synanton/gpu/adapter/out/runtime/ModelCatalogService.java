@@ -162,8 +162,9 @@ public class ModelCatalogService {
 
                 ModelInfo.Builder builder = ModelInfo.newBuilder()
                         .setModelId(modelId)
-                        .setDisplayName(modelInfo.getDisplayName())
-                        .setProvider(modelInfo.getProvider())
+                        // display-name is optional in config; protobuf setters reject null
+                        .setDisplayName(modelInfo.getDisplayName() != null ? modelInfo.getDisplayName() : modelId)
+                        .setProvider(modelInfo.getProvider() != null ? modelInfo.getProvider() : "")
                         .setOperation(request.getOperation())
                         // provider_model_id is deliberately NOT populated: provider model
                         // IDs are never exposed downstream (PR #15 invariant 3).

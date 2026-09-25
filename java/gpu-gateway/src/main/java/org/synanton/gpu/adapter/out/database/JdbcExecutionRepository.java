@@ -99,16 +99,24 @@ public class JdbcExecutionRepository implements ExecutionRepository {
 
     @Override
     public boolean completeSuccess(String executionId, ExecutionUsage usage, byte[] result) {
+        return completeSuccess(executionId, usage, result, null);
+    }
+
+    @Override
+    public boolean completeSuccess(String executionId, ExecutionUsage usage, byte[] result,
+                                   String upstreamRequestId) {
         guardTransition(ExecutionState.RUNNING, ExecutionState.SUCCEEDED);
         int updated = jdbcTemplate.update(
                 """
                 UPDATE executions
-                   SET state = ?, usage = CAST(? AS jsonb), result = ?, updated_at = NOW()
+                   SET state = ?, usage = CAST(? AS jsonb), result = ?, upstream_request_id = ?,
+                       updated_at = NOW()
                  WHERE execution_id = ? AND state = ?
                 """,
                 ExecutionState.SUCCEEDED.name(),
                 toJson(usage),
                 result,
+                upstreamRequestId,
                 executionId,
                 ExecutionState.RUNNING.name()
         );
@@ -209,7 +217,8 @@ public class JdbcExecutionRepository implements ExecutionRepository {
                 instant(resultSet, "leased_until"),
                 fromJson(resultSet.getString("usage"), ExecutionUsage.class),
                 fromJson(resultSet.getString("error"), ExecutionError.class),
-                resultSet.getBytes("result")
+                resultSet.getBytes("result"),
+                resultSet.getString("upstream_request_id")
         );
     }
 

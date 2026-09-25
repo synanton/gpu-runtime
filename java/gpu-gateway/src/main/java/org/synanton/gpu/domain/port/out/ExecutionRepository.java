@@ -36,6 +36,12 @@ public interface ExecutionRepository {
      */
     boolean completeSuccess(String executionId, ExecutionUsage usage, byte[] result);
 
+    /** As {@link #completeSuccess(String, ExecutionUsage, byte[])}, also recording the provider request ID. */
+    default boolean completeSuccess(String executionId, ExecutionUsage usage, byte[] result,
+                                    String upstreamRequestId) {
+        return completeSuccess(executionId, usage, result);
+    }
+
     /**
      * Marks an execution as FAILED or CANCELLED with error detail.
      * Predicated on {@code expectedCurrentState} to prevent overwriting terminal states.

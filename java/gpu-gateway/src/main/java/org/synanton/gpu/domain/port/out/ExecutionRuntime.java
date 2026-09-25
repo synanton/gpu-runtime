@@ -64,7 +64,12 @@ public interface ExecutionRuntime {
     // ─── Result types ────────────────────────────────────────────────────────
 
     sealed interface RuntimeResult {
-        record Success(ExecutionUsage usage, byte[] result) implements RuntimeResult {}
+        /** {@code upstreamRequestId}: the external provider's request ID (§35); null locally. */
+        record Success(ExecutionUsage usage, byte[] result, String upstreamRequestId) implements RuntimeResult {
+            public Success(ExecutionUsage usage, byte[] result) {
+                this(usage, result, null);
+            }
+        }
         record Failure(ExecutionError error, RetryDisposition disposition) implements RuntimeResult {}
     }
 
