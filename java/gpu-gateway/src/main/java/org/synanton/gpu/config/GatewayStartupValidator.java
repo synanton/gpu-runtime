@@ -35,6 +35,16 @@ public class GatewayStartupValidator {
             require(!security.getPrincipals().isEmpty(),
                     "security.mode=mtls requires at least one security.principals entry");
         }
+        GpuGatewayProperties.ExecutionJwt jwt = p.getExecutionJwt();
+        if (jwt.isEnabled()) {
+            require(jwt.getTtlSeconds() >= 1 && jwt.getTtlSeconds() <= 300,
+                    "execution-jwt.ttl-seconds must be 1..300 (Envoy checks exp on arrival; keep tokens short-lived)");
+            require(jwt.getIssuer() != null && !jwt.getIssuer().isBlank()
+                            && jwt.getAudience() != null && !jwt.getAudience().isBlank(),
+                    "execution-jwt.issuer and audience must be set (Deployment Plan §12)");
+            require(jwt.getJwksPort() > 0 && jwt.getJwksPort() < 65536 && jwt.getJwksPort() != p.getGrpcPort(),
+                    "execution-jwt.jwks-port must be a free port distinct from the gRPC port");
+        }
         GpuGatewayProperties.Budget budget = p.getBudget();
         require(ON_OFF.contains(budget.getEnforcement()),
                 "budget.enforcement must be enabled|disabled, was '" + budget.getEnforcement() + "'");
