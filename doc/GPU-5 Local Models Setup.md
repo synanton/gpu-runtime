@@ -7,8 +7,7 @@
 >
 > **State 2026-09-24:** Qwen3 models verified in place post-swap. BGE-base is
 > **complete on all nodes** (models are mirrored everywhere by operator practice);
-> BGE-small (fallback) is **partial** — tokenizer files pending, re-run §5.4 to
-> complete. Downloads are manual via a `uv` venv (§4); if huggingface.co fails
+> BGE-small (fallback) is **complete on all nodes** (verified 2026-09-25). Downloads are manual via a `uv` venv (§4); if huggingface.co fails
 > with SSL EOF, use the mirror endpoint (§4.1).
 
 ## 1. Purpose
@@ -310,7 +309,7 @@ du -sh /mnt/local-fast/models/qwen3-reranker-0.6b   # expected ~1.2G
 
 ## 5.4 node1 — BGE-small fallback (optional)
 
-The documented embedding fallback (plan D4, §2 of the implementation plan). Not deployed by default; download so it is ready if needed. **State 2026-09-24: partial** (weights present; `tokenizer.json`/`vocab.txt` missing) — re-running the command below completes it:
+The documented embedding fallback (plan D4, §2 of the implementation plan). Not deployed by default; download so it is ready if needed. **State 2026-09-25: complete on node1/node2/node3** (weights + tokenizer files verified). To re-create it on a new node:
 
 ```bash
 ssh node1

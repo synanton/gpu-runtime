@@ -14,7 +14,7 @@
 |---|----------|----------------|-----------|
 | D1 | vLLM pinned at **v0.29.0** (`vllm/vllm-openai:v0.29.0`, default `cu130` variant) — used on node2/node3 only. | §9 baseline says `vLLM 0.6.x` | Qwen3-Reranker support exists only in vLLM ≥ 0.9.2 (PR vllm-project/vllm#19260, merged 2025-06-11). §9 explicitly permits runtime upgrades as validated compatibility changes. node2 is Ada (sm_8.9), node3 is Blackwell (sm_12.0); the v0.29.0 cu130 image covers both. Validation per §9 is part of the acceptance phase. |
 | D2 | **One inference workload per physical GPU** (PR #15 review §2): node1 → embedding, node2 → reranker, node3 → synthesis. The newest/largest GPU (RTX 5060 Ti) serves the workload with the greatest memory pressure (synthesis: KV cache, concurrency, long context). | §41 "one GPU per inference workload" | The 2026-09-23 revision colocated embedding+reranker in one pod on node3 with a single `nvidia.com/gpu: 1` request. That design is **invalid**: device-plugin extended resources are allocated per *container*, not per Pod; there is no Pod-level GPU visibility inheritance; and one GPU request creates no VRAM partition. PR #15 review blocked on it (P0.1). The colocated manifest is removed, not kept as an option; any future GPU sharing goes through documented mechanisms (MIG/time-slicing) as a separate experiment, never the default PoC. |
-| D3 | Model copies as verified **2026-09-24**: node2 holds `qwen3-reranker-0.6b` (normalized into `models/` today) plus `qwen3-4b-instruct-2507` and flat `qwen3-embedding-0.6b`; node3 holds `qwen3-4b-instruct-2507` (normalized today) plus embedding/reranker copies. The node2↔node3 role swap therefore needed **no inter-node copy** — only the flat→`models/` moves in §4.4. Operator practice: **all models are mirrored on all nodes** — `bge-base-en-v1.5` is complete everywhere (§4.5); `bge-small` (fallback) is partial pending one re-run. Extra copies are harmless (hostPath reads only the local copy, D6). | Local Models Setup §5 | §4.4–4.6 |
+| D3 | Model copies as verified **2026-09-24**: node2 holds `qwen3-reranker-0.6b` (normalized into `models/` today) plus `qwen3-4b-instruct-2507` and flat `qwen3-embedding-0.6b`; node3 holds `qwen3-4b-instruct-2507` (normalized today) plus embedding/reranker copies. The node2↔node3 role swap therefore needed **no inter-node copy** — only the flat→`models/` moves in §4.4. Operator practice: **all models are mirrored on all nodes** — `bge-base-en-v1.5` is complete everywhere (§4.5); `bge-small-en-v1.5` (fallback) is complete everywhere too (verified 2026-09-25). Extra copies are harmless (hostPath reads only the local copy, D6). | Local Models Setup §5 | §4.4–4.6 |
 | D4 | Embedding serving stack on node1: **TEI `turing-1.9` + `BAAI/bge-base-en-v1.5` (fp16)**; `BAAI/bge-small-en-v1.5` is the documented fallback model (PR #15 review §2.2 "TEI / equivalent encoder server", §3.1). | §41, Local Models Setup | The GTX 1650 is consumer Turing (sm_7.5, 4 GB, no bf16, no tensor cores): the pinned vLLM cu130 image ships no sm_75 kernels, so vLLM is not an option on node1. TEI publishes a `turing` variant for sm_7.5 (flash-attention auto-disabled on Turing per TEI's precision warning). BGE-base fp16 is ~0.5 GB — comfortable in 4 GB. Fallback ladder if the GPU path misbehaves at bring-up: bge-small → TEI CPU build on node1's 16C/64Gi. |
 | D5 | Namespace **`gpu-plane`**; registry secret name **`local-registry-cred`**; images pulled from **`local-registry:5000`** on node0. | §22 T-K8S-0b | Reuses the existing registry and conventions from the speech-to-speech project. |
 | D6 | Model weights via `hostPath` from `/mnt/local-fast/models/...`, read-only, container path `/models`. | §41, Local Models Setup §9 | Longhorn is installed but not used for model weights (matches spec: "Longhorn is not required for model weights"). |
@@ -108,7 +108,7 @@ kubectl get pods -n kube-system -l app=nvidia-device-plugin-daemonset
 kubectl get runtimeclass nvidia
 
 # 4.3 Verify models per node (verified 2026-09-24: qwen3 intact, Qwen3ForCausalLM bf16;
-#     bge-base COMPLETE incl. tokenizer files; bge-small fallback partial — 4.5)
+#     bge-base and bge-small (fallback) COMPLETE incl. tokenizer files on all nodes — 4.5)
 ssh node1 'ls /mnt/local-fast/models/bge-base-en-v1.5'                                  # BGE-base: complete (4.5)
 ssh node2 'test -f /mnt/local-fast/models/qwen3-reranker-0.6b/config.json && du -sh /mnt/local-fast/models/qwen3-reranker-0.6b'   # 1.2G
 ssh node3 'test -f /mnt/local-fast/models/qwen3-4b-instruct-2507/config.json && du -sh /mnt/local-fast/models/qwen3-4b-instruct-2507'   # 7.6G
@@ -127,12 +127,12 @@ ssh node3 'mv /mnt/local-fast/qwen3-4b-instruct-2507 /mnt/local-fast/models/' # 
 # ([SSL: UNEXPECTED_EOF_WHILE_READING]) → export HF_ENDPOINT=https://hf-mirror.com
 # and re-run; `hf download` resumes and only fetches missing files.
 #
-# State 2026-09-24: bge-base COMPLETE on all nodes (operator mirrors models
-# everywhere). bge-small (fallback, §2) still PARTIAL — tokenizer.json/vocab.txt
-# missing; re-run its download to complete:
+# State 2026-09-25: bge-base and bge-small (fallback, §2) COMPLETE on node1/2/3
+# (operator mirrors models everywhere; weights + tokenizer files verified).
+# To (re)create the fallback on a node:
 ssh node1 'source ~/k8s/.venv/bin/activate && hf download BAAI/bge-small-en-v1.5 \
   --local-dir /mnt/local-fast/models/bge-small-en-v1.5'
-# verify — all must exist before phase 3:
+# verify — all must exist before phase 3 (bge-small: same check on its directory):
 ssh node1 'test -f /mnt/local-fast/models/bge-base-en-v1.5/tokenizer.json \
   -a -f /mnt/local-fast/models/bge-base-en-v1.5/tokenizer_config.json \
   -a -f /mnt/local-fast/models/bge-base-en-v1.5/vocab.txt && echo bge-base complete'

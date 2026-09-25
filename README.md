@@ -224,7 +224,7 @@ Platform consumes (Deployment Plan v3.0.0 §4). There is no REST API; actuator
 | **Acceptance** | **Blocked:** Envoy rejects Gateway→backend calls until T-K8S-6a (fail closed); no PoC run yet. Phases 0–4 + per-service smoke executable | **Passing:** `ExternalAcceptanceTest` 17/17; `scripts/smoke-test.sh` 23/23 on the packaged stack incl. live OpenRouter free models |
 
 GPU-5 model state: Qwen3 weights verified; `bge-base-en-v1.5` complete on all nodes
-(mirrored); `bge-small-en-v1.5` fallback partial. Manual downloads use a `uv` venv +
+(mirrored); `bge-small-en-v1.5` fallback complete on all nodes. Manual downloads use a `uv` venv +
 `HF_ENDPOINT=https://hf-mirror.com` workaround (Local Models Setup §4).
 
 GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introducing production-scale scheduling complexity.
