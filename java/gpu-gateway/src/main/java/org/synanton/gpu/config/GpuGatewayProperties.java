@@ -16,6 +16,9 @@ public class GpuGatewayProperties {
     private Artifacts artifacts = new Artifacts();
     private Map<String, ProviderConfig> providers = new HashMap<>();
     private Routing routing = new Routing();
+    private Sensitivity sensitivity = new Sensitivity();
+    private Budget budget = new Budget();
+    private Usage usage = new Usage();
     private ModelCatalog modelCatalog = new ModelCatalog();
     private Map<String, ModelConfig> models = new HashMap<>();
 
@@ -41,9 +44,9 @@ public class GpuGatewayProperties {
      * Provider registry (PR #15 review §5): keyed by provider id
      * ({@code gpu-gateway.providers.<id>}), e.g. {@code openai}, {@code mock}.
      *
-     * <p>Enforced today: {@code api-key}, {@code base-url}, {@code enabled},
-     * {@code circuit-breaker}. Declarative until their tickets land (do not claim
-     * otherwise): {@code health} (T-K8S-46 — no health scheduler yet).
+     * <p>All keys are enforced: {@code api-key}, {@code base-url}, {@code enabled},
+     * {@code headers}, {@code allowed-model-pattern}, {@code circuit-breaker},
+     * {@code health} (ProviderHealthMonitor).
      */
     public static class ProviderConfig {
         private String apiKey;
@@ -84,10 +87,15 @@ public class GpuGatewayProperties {
             return value != null && !value.isBlank();
         }
 
-        /** Declarative (T-K8S-46): bound but not yet acted on by a health scheduler. */
+        /** T-K8S-46: probed by ProviderHealthMonitor when {@code path} is set. */
         public static class Health {
             private String path;
             private int intervalSeconds = 60;
+            /** Consecutive failed probes before the provider is marked unhealthy. */
+            private int failureThreshold = 2;
+
+            public int getFailureThreshold() { return failureThreshold; }
+            public void setFailureThreshold(int failureThreshold) { this.failureThreshold = failureThreshold; }
 
             public String getPath() { return path; }
             public void setPath(String path) { this.path = path; }
@@ -105,6 +113,45 @@ public class GpuGatewayProperties {
             public int getResetSeconds() { return resetSeconds; }
             public void setResetSeconds(int resetSeconds) { this.resetSeconds = resetSeconds; }
         }
+    }
+
+    /** T-K8S-49 sensitivity policy: fail closed. */
+    public static class Sensitivity {
+        /** Model tags / request data_tags that forbid external routing. */
+        private java.util.List<String> blockExternalTags = new java.util.ArrayList<>();
+
+        public java.util.List<String> getBlockExternalTags() { return blockExternalTags; }
+        public void setBlockExternalTags(java.util.List<String> v) { this.blockExternalTags = v; }
+    }
+
+    /** T-K8S-48b per-tenant daily budget (UTC day), enforced from the cost ledger. */
+    public static class Budget {
+        /** {@code enabled} | {@code disabled}; anything else fails startup. */
+        private String enforcement = "disabled";
+        private java.math.BigDecimal defaultDailyUsd;
+        private Map<String, java.math.BigDecimal> tenantDailyUsd = new HashMap<>();
+
+        public String getEnforcement() { return enforcement; }
+        public void setEnforcement(String enforcement) { this.enforcement = enforcement; }
+        public boolean isEnabled() { return "enabled".equals(enforcement); }
+        public java.math.BigDecimal getDefaultDailyUsd() { return defaultDailyUsd; }
+        public void setDefaultDailyUsd(java.math.BigDecimal v) { this.defaultDailyUsd = v; }
+        public Map<String, java.math.BigDecimal> getTenantDailyUsd() { return tenantDailyUsd; }
+        public void setTenantDailyUsd(Map<String, java.math.BigDecimal> v) { this.tenantDailyUsd = v; }
+
+        public java.math.BigDecimal limitFor(String tenantId) {
+            return tenantDailyUsd.getOrDefault(tenantId, defaultDailyUsd);
+        }
+    }
+
+    /** T-K8S-48 cost ledger. */
+    public static class Usage {
+        /** {@code enabled} | {@code disabled}; anything else fails startup. */
+        private String costLedger = "disabled";
+
+        public String getCostLedger() { return costLedger; }
+        public void setCostLedger(String costLedger) { this.costLedger = costLedger; }
+        public boolean isCostLedgerEnabled() { return "enabled".equals(costLedger); }
     }
 
     /** GPU-7 routing controls (§32/§39). */
@@ -142,6 +189,19 @@ public class GpuGatewayProperties {
                 private int maxInputTokens = 8192;
                 private int maxOutputTokens = 2048;
                 private int embeddingDim = 1536;
+                /** Sensitivity tags (T-K8S-49); tagged models never route externally if blocked. */
+                private java.util.List<String> tags = new java.util.ArrayList<>();
+                /** Price per million input/output tokens (T-K8S-48). Required for external
+                 *  models when budget enforcement is enabled (startup fails closed otherwise). */
+                private java.math.BigDecimal inputUsdPerMillion;
+                private java.math.BigDecimal outputUsdPerMillion;
+
+                public java.util.List<String> getTags() { return tags; }
+                public void setTags(java.util.List<String> tags) { this.tags = tags; }
+                public java.math.BigDecimal getInputUsdPerMillion() { return inputUsdPerMillion; }
+                public void setInputUsdPerMillion(java.math.BigDecimal v) { this.inputUsdPerMillion = v; }
+                public java.math.BigDecimal getOutputUsdPerMillion() { return outputUsdPerMillion; }
+                public void setOutputUsdPerMillion(java.math.BigDecimal v) { this.outputUsdPerMillion = v; }
 
                 public String getProviderModelId() { return providerModelId; }
                 public void setProviderModelId(String providerModelId) { this.providerModelId = providerModelId; }
@@ -227,6 +287,12 @@ public class GpuGatewayProperties {
     public Map<String, ProviderConfig> getProviders() { return providers; }
     public void setProviders(Map<String, ProviderConfig> providers) { this.providers = providers; }
     public Routing getRouting() { return routing; }
+    public Sensitivity getSensitivity() { return sensitivity; }
+    public void setSensitivity(Sensitivity sensitivity) { this.sensitivity = sensitivity; }
+    public Budget getBudget() { return budget; }
+    public void setBudget(Budget budget) { this.budget = budget; }
+    public Usage getUsage() { return usage; }
+    public void setUsage(Usage usage) { this.usage = usage; }
     public void setRouting(Routing routing) { this.routing = routing; }
     public ModelCatalog getModelCatalog() { return modelCatalog; }
     public void setModelCatalog(ModelCatalog modelCatalog) { this.modelCatalog = modelCatalog; }

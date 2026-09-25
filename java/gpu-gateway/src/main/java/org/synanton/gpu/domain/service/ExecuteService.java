@@ -50,6 +50,7 @@ public class ExecuteService implements ExecuteUseCase {
     private final HeartbeatManager heartbeatManager;
     private final ProviderRouter providerRouter;
     private final ProviderRuntimeRegistry providerRuntimeRegistry;
+    private final ExternalRoutingPolicy externalRoutingPolicy;
 
     /** The one step unary and streaming execution differ in. */
     @FunctionalInterface
@@ -85,6 +86,8 @@ public class ExecuteService implements ExecuteUseCase {
         // unknown model/provider, disabled provider, local fallback attempt).
         RoutingDecision decision = providerRouter.route(request);
         log.info("Routing decision: {}", decision);
+        // GPU-7 controls (sensitivity, provider health, budget) — fail closed, before admission
+        externalRoutingPolicy.check(decision, request);
         // Resolve the external runtime before admission too, so a missing runtime is a
         // denial — never an admitted execution left dangling in ACCEPTED.
         ExecutionRuntime runtime = decision.isLocal() ? vllmRuntime
@@ -110,9 +113,12 @@ public class ExecuteService implements ExecuteUseCase {
             listener.onAdmitted(admitted.executionId());
         }
 
-        return decision.isLocal()
-                ? loadAndDispatchLocal(request, admitted, dispatch)
-                : dispatchExternal(request, admitted, decision, runtime, dispatch);
+        if (decision.isLocal()) {
+            return loadAndDispatchLocal(request, admitted, dispatch);
+        }
+        Execution done = dispatchExternal(request, admitted, decision, runtime, dispatch);
+        externalRoutingPolicy.recordUsage(decision, request, done); // cost ledger (T-K8S-48)
+        return done;
     }
 
     /** Local (GPU-5) path: model load phase + vLLM dispatch. */

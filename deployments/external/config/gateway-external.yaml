@@ -1,15 +1,17 @@
 # GPU-7 deployment contract (spec §26/§33/§39-§44b). Mounted into the Gateway and
 # merged over the bundled application.yml via SPRING_CONFIG_ADDITIONAL_LOCATION.
 #
-# Implementation state per key group (PR #15 review — do not claim more than exists):
-#   dispatch.strategy            ENFORCED  — "external" selects provider routing;
-#                                            unknown strategies fail startup (§5.5)
-#   routing.external-enabled     ENFORCED  — kill switch denies all external routing
-#   providers.<id>.api-key/base-url/enabled/circuit-breaker
-#                              ENFORCED  — registry + generic OpenAI-compatible runtime
-#   providers.<id>.health      DECLARED  — bound, but no health scheduler yet (T-K8S-46)
-#   sensitivity / budget / usage.cost-ledger
-#                              DECLARED  — ticket work (T-K8S-48/48b/49); not enforced
+# Implementation state (PR #15 review — every key below is ENFORCED; startup fails
+# closed on inconsistency, Plan §5.5):
+#   dispatch.strategy           "external": provider routing only; unknown strategies fail
+#   routing.external-enabled    kill switch (static config; changing it needs a restart —
+#                               a runtime toggle / persisted control state is T-K8S-38)
+#   providers.<id>.*            registry: api-key, base-url, enabled, headers,
+#                               allowed-model-pattern, circuit-breaker (in-memory per
+#                               replica), health (probed every interval-seconds)
+#   sensitivity                 model tags + request data_tags → external routing denied
+#   budget                      per-tenant UTC-day limit from the cost ledger
+#   usage.cost-ledger           one PostgreSQL row per successful external execution
 #
 # The model-catalog drives provider selection (logical model → provider + provider
 # model ID). The provider model ID is rewritten into the outbound payload and the
@@ -46,7 +48,7 @@ gpu-gateway:
       base-url: http://mock-provider:8080/v1   # mock serves /v1/*; runtime appends /<operation path>
       enabled: true
       health:
-        path: /healthz
+        path: /models           # relative to base-url → /v1/models (authenticated)
         interval-seconds: 30
       circuit-breaker:
         failure-threshold: 5
@@ -60,6 +62,8 @@ gpu-gateway:
           synanton-mock-chat:   # logical ID ≠ provider ID: proves the rewrite end-to-end
             provider: MOCK
             provider-model-id: mock-chat-1
+            input-usd-per-million: 1.00   # fictional mock price: exercises the ledger/budget
+            output-usd-per-million: 2.00
             display-name: "Mock Chat (acceptance)"
             is-default: true
             max-input-tokens: 8192
@@ -67,15 +71,26 @@ gpu-gateway:
           synanton-free-chat:   # real arm (OpenRouter free model; verified 2026-09-25, cost 0)
             provider: OPENAI
             provider-model-id: liquid/lfm-2.5-2.6b:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
             display-name: "LFM 2.5 2.6B (OpenRouter free)"
             max-input-tokens: 65536
             max-output-tokens: 2048
+          synanton-mock-chat-sensitive:   # acceptance: tagged → external routing denied
+            provider: MOCK
+            provider-model-id: mock-chat-1
+            display-name: "Mock Chat (sensitive — always denied externally)"
+            tags: [sensitive]
+            input-usd-per-million: 1.00
+            output-usd-per-million: 2.00
       EMBED:
         default-model: synanton-mock-embedding
         models:
           synanton-mock-embedding:   # logical ID ≠ provider ID: proves the rewrite end-to-end
             provider: MOCK
             provider-model-id: mock-embedding-1
+            input-usd-per-million: 1.00   # fictional mock price: exercises the ledger/budget
+            output-usd-per-million: 2.00
             display-name: "Mock Embedding (acceptance)"
             is-default: true
             max-input-tokens: 8192
@@ -83,6 +98,8 @@ gpu-gateway:
           synanton-free-embedding:  # real arm (OpenRouter free embedding model; cost 0)
             provider: OPENAI
             provider-model-id: nvidia/nemotron-3-embed-1b:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
             display-name: "Nemotron 3 Embed 1B (OpenRouter free)"
             max-input-tokens: 8192
             embedding-dim: 2048
@@ -96,22 +113,23 @@ gpu-gateway:
           synanton-mock-reranker:   # logical ≠ provider ID; §40: advertised because the mock supports rerank
             provider: MOCK
             provider-model-id: mock-reranker-1
+            input-usd-per-million: 1.00   # fictional mock price: exercises the ledger/budget
+            output-usd-per-million: 2.00
             display-name: "Mock Reranker (acceptance)"
             is-default: true
             max-input-tokens: 4096
 
-  # [T-K8S-49] sensitivity policy — DECLARED, not enforced yet (no model tags exist
-  # in the catalog schema). Fail-closed enforcement lands with the ticket.
+  # [T-K8S-49] sensitivity policy — ENFORCED, fail closed
   sensitivity:
     block-external-tags: [sensitive, pii]
 
-  # [T-K8S-48b] budget enforcement — DECLARED, not enforced yet (needs §33 PostgreSQL
-  # state). Fail-closed enforcement lands with the ticket.
+  # [T-K8S-48b] budget — ENFORCED from the cost ledger, fail closed
   budget:
     enforcement: enabled
     default-daily-usd: 5.00
+    tenant-daily-usd:
+      smoke-budget-tenant: 0.000001   # acceptance: exhausted after one mock call
 
-  # [T-K8S-48] cost ledger — DECLARED; provider-reported usage IS captured on every
-  # execution (ExecutionUsage), the ledger/reporting side lands with the ticket.
+  # [T-K8S-48] cost ledger — ENFORCED (PostgreSQL cost_ledger, V2 migration)
   usage:
     cost-ledger: enabled

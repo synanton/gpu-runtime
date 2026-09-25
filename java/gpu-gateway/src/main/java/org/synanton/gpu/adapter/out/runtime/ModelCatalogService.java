@@ -97,6 +97,14 @@ public class ModelCatalogService {
         return null;
     }
 
+    /** Catalog entry of a logical model under an operation, if registered. */
+    public Optional<GpuGatewayProperties.ModelCatalog.OperationModels.ModelInfo> modelInfo(
+            String modelId, Operation operation) {
+        GpuGatewayProperties.ModelCatalog.OperationModels ops =
+                modelCatalog.getOperations().get(operation.name());
+        return ops == null ? Optional.empty() : Optional.ofNullable(ops.getModels().get(modelId));
+    }
+
     /** True when the logical model is registered under at least one operation. */
     public boolean isKnownModel(String modelId) {
         return modelCatalog.getOperations().values().stream()

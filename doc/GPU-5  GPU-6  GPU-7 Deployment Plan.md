@@ -1118,6 +1118,8 @@ Kill-switch state MUST be persistently represented where required by the deploym
 
 T-K8S-39 owns the external routing kill switch.
 
+**Implementation state (3.0.0):** implemented as configuration — `gpu-gateway.routing.external-enabled: false` denies every external route (`routing_disabled`). The state is persisted in deployment configuration and survives restart; changing it requires a restart. A runtime toggle backed by PostgreSQL is **not implemented** (T-K8S-38).
+
 ---
 
 # 33. GPU-7 Provider Control
@@ -1136,6 +1138,19 @@ Provider control state includes:
 Provider control state MUST be persisted where required for restart consistency.
 
 T-K8S-38 owns external routing control state.
+
+**Implementation state (3.0.0):**
+
+| Control | Implemented | Where the state lives |
+| --- | --- | --- |
+| Provider enabled/disabled | Yes | configuration (`providers.<id>.enabled`) |
+| Credentials | Yes | environment → configuration (§29) |
+| Logical model mappings | Yes | configuration (`model-catalog`) |
+| Health | Yes (`ProviderHealthMonitor`, `health.path/interval-seconds/failure-threshold`) | in-memory per replica, re-probed at startup |
+| Circuit breaker | Yes (`circuit-breaker.failure-threshold/reset-seconds`) | in-memory per replica |
+| Budget | Yes (per-tenant UTC-day limit, `budget.*`) | PostgreSQL `cost_ledger` |
+| Sensitivity policy | Yes (model `tags` + request `data_tags` vs `sensitivity.block-external-tags`) | configuration |
+| Runtime-mutable control state (persisted toggles, persisted breaker/health) | **No** — T-K8S-38 | — |
 
 ---
 
@@ -1181,8 +1196,8 @@ PostgreSQL 16.x
 Reference migrations:
 
 ```text
-V1
-V2
+V1  executions, artifact_cache
+V2  cost_ledger (GPU-7 cost ledger / budget state)
 ```
 
 PostgreSQL stores persistent Gateway state including, as applicable:
@@ -1245,6 +1260,8 @@ The state MUST distinguish:
 * circuit breaker state.
 
 Control state MUST survive Gateway restart where persistence is required by policy.
+
+**Implementation state (3.0.0):** configuration-backed state (routing enabled, provider enabled, model mappings) survives restart; health and circuit-breaker state are in-memory and rebuilt after restart. A persisted, runtime-mutable control-state store is **not implemented** (see §33).
 
 ---
 

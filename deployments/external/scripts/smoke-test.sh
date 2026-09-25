@@ -22,10 +22,10 @@ RUN="smoke-$(date +%s)-$$"
 ok()  { echo "PASS  $1"; PASS=$((PASS+1)); }
 bad() { echo "FAIL  $1${2:+ — $2}"; FAIL=$((FAIL+1)); }
 
-# request <request_id> <logical model> <OPERATION> <payload-json>
+# request <request_id> <logical model> <OPERATION> <payload-json> [tenant] [data_tags-json-array]
 request() {
-  printf '{"request_id":"%s","tenant_id":"smoke-tenant","model":"%s","model_version":"1","operation":"%s","payload":"%s"}' \
-    "$1" "$2" "$3" "$(payload_b64 "$4")"
+  printf '{"request_id":"%s","tenant_id":"%s","model":"%s","model_version":"1","operation":"%s","payload":"%s","data_tags":%s}' \
+    "$1" "${5:-smoke-tenant}" "$2" "$3" "$(payload_b64 "$4")" "${6:-[]}"
 }
 call() { "$CALL" "$GW" "$@" 2>&1 || true; }
 
@@ -125,6 +125,21 @@ if [[ "${SMOKE_REAL_PROVIDER:-0}" == "1" ]]; then
   out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-real-rerank" synanton-free-chat RERANK '{"query":"q","documents":["a"]}')")"
   [[ "$out" == *capability_not_supported* ]] && ok "real arm has no rerank → capability_not_supported" || bad "real rerank gap" "$out"
 fi
+
+echo "== GPU-7 controls (sensitivity, budget; fail closed)"
+out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-sens" synanton-mock-chat-sensitive SYNTHESIZE '{"messages":[]}')")"
+[[ "$out" == *PermissionDenied* && "$out" == *sensitive_model_external_blocked* ]] \
+  && ok "sensitive-tagged model → sensitive_model_external_blocked" || bad "sensitive model" "$out"
+out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-pii" synanton-mock-chat SYNTHESIZE '{"messages":[]}' smoke-tenant '["pii"]')")"
+[[ "$out" == *sensitive_model_external_blocked* ]] && ok "request data_tags [pii] → external routing denied" || bad "pii data tag" "$out"
+# smoke-budget-tenant has a 0.000001 USD/day budget: exhausted by at most one mock call
+denied=""
+for n in 1 2; do
+  out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-budget-$n" synanton-mock-chat SYNTHESIZE \
+    '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"hi"}]}' smoke-budget-tenant)")"
+  [[ "$out" == *ResourceExhausted* && "$out" == *budget_exceeded* ]] && { denied=yes; break; }
+done
+[[ -n "$denied" ]] && ok "tenant budget exhausted → RESOURCE_EXHAUSTED budget_exceeded" || bad "budget" "$out"
 
 echo "== $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]
