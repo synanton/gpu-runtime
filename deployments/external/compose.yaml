@@ -10,7 +10,7 @@ name: gpu-7-external
 
 services:
   postgres:
-    image: postgres:16.4
+    image: postgres:16.4@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412
     environment:
       POSTGRES_USER: gpu
       POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
@@ -48,7 +48,7 @@ services:
       context: ../..                                   # repo root; run ./gradlew :java:gpu-gateway:bootJar first
       dockerfile: deployments/homelab/docker/gateway.Dockerfile
       args:
-        BASE_IMAGE: eclipse-temurin:21-jre             # public base for the single-node profile
+        BASE_IMAGE: eclipse-temurin:21-jre@sha256:49e21e16e3c86eb7816a44a67549910ed090fbeb40c29c525d58bf5e02e91b0f             # public base for the single-node profile
     depends_on:
       postgres:
         condition: service_healthy

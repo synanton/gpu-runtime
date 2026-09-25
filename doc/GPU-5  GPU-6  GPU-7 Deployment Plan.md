@@ -1622,6 +1622,8 @@ The resulting package MUST demonstrate:
 
 The package MAY target Kubernetes or a single-node container deployment.
 
+**Executable checklist:** `python3 tools/gpu7-package-check.py --live` runs every item above: package shape, §8 digest pinning (`tools/pin-image-digests.sh --check`), fail-closed controls, the T-K8S-51 suite and the packaged smoke test. `tools/pin-image-digests.sh` pins the compose images to `repo:tag@sha256:…`. The §49 freeze attestation remains a reviewer sign-off; the tool produces the evidence, not the signature.
+
 ---
 
 # 47. Change Summary — v3.1.0
