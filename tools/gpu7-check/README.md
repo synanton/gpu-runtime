@@ -3,9 +3,18 @@
 Validates the GPU-7 external-provider profile end-to-end with a **real provider key**,
 over the same transport the Platform uses: gRPC `synanton.gpu.v1` over **mTLS**.
 
-It checks model discovery, chat, streaming (`include_usage`), embeddings, the rerank
+It checks model discovery, chat, streaming (`include_usage`), the Responses API, the rerank
 capability gap, tenant authorization, logical-ID restoration (provider model IDs are
 never exposed), usage capture and `upstream_request_id`.
+
+It also checks embeddings on **every** real-arm EMBED model: the vector length must equal
+the catalog's `embedding-dim`. That covers `synanton-free-embedding` and the retrieval-benchmark
+arms `synanton-free-embedding-nemotron-vl` and `synanton-free-embedding-lfm` (platform benchmark
+§6 Phase B1-G, G3).
+
+When `certs/synanton-benchmark.crt` exists (`gen-certs.sh` creates it by default), it checks
+the benchmark principal too. That principal may embed for its `rb-*` tenants and is denied
+(`tenant_not_allowed`) for any other tenant. Last run: 20 passed, spend unchanged.
 
 ## Safety for a spend-capped key
 
@@ -30,7 +39,10 @@ uv pip install -r requirements.txt
 ```
 
 Put the key in `deployments/external/.env` (also used by compose), or in
-`tools/gpu7-check/.env`:
+`tools/gpu7-check/.env`. `--compose` also needs the dev secrets `POSTGRES_PASSWORD` and
+`MOCK_PROVIDER_API_KEY`. Put them in `.env`, or export throwaway values for the run only, e.g.
+`export POSTGRES_PASSWORD=$(openssl rand -hex 16) MOCK_PROVIDER_API_KEY=$(openssl rand -hex 16)`.
+The packaged smoke inside `gpu7-package-check.py --live` also needs `GRPCURL` (path to grpcurl).
 
 ```bash
 OPENAI_API_KEY=sk-or-v1-…          # OpenRouter key (free models only)

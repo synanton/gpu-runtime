@@ -57,6 +57,9 @@ def main():
     sec = cfg.get("security", {})
     check("mTLS required (security.mode=mtls) with registered principals",
           sec.get("mode") == "mtls" and bool(sec.get("principals")))
+    wild = [n for n, pr in (sec.get("principals") or {}).items()
+            if "*" in (pr.get("tenants") or []) and "admin" not in (pr.get("roles") or [])]
+    check("only admin principals may act for all tenants ('*')", not wild, str(wild))
     check("kill switch present (routing.external-enabled)", "external-enabled" in cfg.get("routing", {}))
     check("budget enforcement enabled", cfg.get("budget", {}).get("enforcement") == "enabled")
     check("sensitivity policy configured", bool(cfg.get("sensitivity", {}).get("block-external-tags")))

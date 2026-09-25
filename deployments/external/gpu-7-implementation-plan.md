@@ -13,7 +13,7 @@
 | --- | --- |
 | **Deployment contract** | **Defined** — Deployment Plan **v3.1.0**; transport = gRPC `synanton.gpu.v1` over mTLS (§4, §13) |
 | **Implementation** | **Complete for the contract** (table below). Only the §49 freeze attestation (a reviewer sign-off) is outstanding |
-| **Acceptance (§37, T-K8S-51)** | **Passing** — `ExternalAcceptanceTest` (31 cases: real gRPC, PostgreSQL, fake providers); packaged `scripts/smoke-test.sh` (27 mock / 32 with the live arm); live `tools/gpu7-check` (16, OpenRouter free models, zero spend); `tools/gpu7-package-check.py --live` §46 checklist 15/15 |
+| **Acceptance (§37, T-K8S-51)** | **Passing** — `ExternalAcceptanceTest` (31 cases: real gRPC, PostgreSQL, fake providers); packaged `scripts/smoke-test.sh` (27 mock / 32 with the live arm); live `tools/gpu7-check` (20, OpenRouter free models incl. all three embedding arms and the `synanton-benchmark` principal, zero spend); `tools/gpu7-package-check.py --live` §46 checklist 16/16 |
 
 | Capability | Ticket / spec | Where |
 | --- | --- | --- |
@@ -140,7 +140,7 @@ Executable forms: unit/component tests in `java/gpu-gateway` and `scripts/smoke-
 The Gateway's gRPC port is **mTLS-only**. Generate the self-signed dev PKI before `docker compose up`:
 
 ```bash
-./scripts/gen-certs.sh        # → ./certs (git-ignored): CA, server, clients synanton-platform + gpu7-smoke
+./scripts/gen-certs.sh        # → ./certs (git-ignored): CA, server, clients synanton-platform, gpu7-smoke, synanton-benchmark
 ```
 
 Principals (client-certificate CN → allowed tenants) are in `config/gateway-external.yaml` under `gpu-gateway.security`. Full instructions — verification, adding principals, rotation, revocation, Platform client settings, troubleshooting — are in `doc/GPU Plane mTLS Setup.md`.

@@ -33,6 +33,14 @@ gpu-gateway:
         roles: [admin]
       gpu7-smoke:                   # scripts/smoke-test.sh, tools/gpu7-check
         tenants: [smoke-tenant, smoke-budget-tenant]
+      synanton-benchmark:           # platform retrieval benchmark (B1-G): synquest/synflux under the
+        tenants:                    # gpu-plane profile. Explicit list, never "*": one tenant pair
+          - rb-fixed-g              # (fixed / semantic chunking) per free embedding arm.
+          - rb-semantic-g           #   synanton-free-embedding (nemotron-3-embed-1b)
+          - rb-fixed-g-vl
+          - rb-semantic-g-vl        #   synanton-free-embedding-nemotron-vl
+          - rb-fixed-g-lfm
+          - rb-semantic-g-lfm       #   synanton-free-embedding-lfm
 
   dispatch:
     strategy: external        # GPU-7 routing: provider adapters, never local vLLM.
@@ -122,6 +130,26 @@ gpu-gateway:
             display-name: "Nemotron 3 Embed 1B (OpenRouter free)"
             max-input-tokens: 8192
             embedding-dim: 2048
+          # Benchmark arms (platform retrieval benchmark §6 Phase B1-G, G3). Native dims were
+          # measured by tools/gpu7-check/embed_probe.py (G0); the platform indexes every arm at
+          # 1024 (synquest EMBED_DIM/EMBED_TRUNCATE_DIM). max-input-tokens is advertised in
+          # GetModels, not enforced: over-long input fails upstream (upstream_provider_error).
+          synanton-free-embedding-nemotron-vl:
+            provider: OPENAI
+            provider-model-id: nvidia/llama-nemotron-embed-vl-1b-v2:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
+            display-name: "Llama Nemotron Embed VL 1B v2 (OpenRouter free)"
+            max-input-tokens: 8192
+            embedding-dim: 2048
+          synanton-free-embedding-lfm:
+            provider: OPENAI
+            provider-model-id: liquid/lfm-2.5-embedding-350m:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
+            display-name: "LFM 2.5 Embedding 350M (OpenRouter free)"
+            max-input-tokens: 512       # provider context window; chunks must fit (G6 checks)
+            embedding-dim: 1024
           # Paid models (e.g. openai/text-embedding-3-small, the platform benchmark's
           # opt-in arm) are rejected at startup by allowed-model-pattern while the
           # capped test key is in use. No OpenRouter rerank model exists: RERANK on the
@@ -164,6 +192,14 @@ gpu-gateway:
     default-daily-usd: 5.00
     tenant-daily-usd:
       smoke-budget-tenant: 0.000001   # acceptance: exhausted after one mock call
+      # Benchmark tenants use free models only (cost 0 never reaches the limit). Defence in
+      # depth: if a priced model were ever routed for them, the first call exhausts the budget.
+      rb-fixed-g: 0.000001
+      rb-semantic-g: 0.000001
+      rb-fixed-g-vl: 0.000001
+      rb-semantic-g-vl: 0.000001
+      rb-fixed-g-lfm: 0.000001
+      rb-semantic-g-lfm: 0.000001
 
   # [T-K8S-48] cost ledger — ENFORCED (PostgreSQL cost_ledger, V2 migration)
   usage:

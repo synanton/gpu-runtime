@@ -85,6 +85,15 @@ def catalog_real_models() -> list[tuple[str, str, str]]:
     return out
 
 
+def catalog_embed_dims() -> dict[str, int]:
+    """logical EMBED model → catalog embedding-dim (real provider only)."""
+    import yaml
+    cfg = yaml.safe_load(Path(CONFIG_PATH).read_text())["gpu-gateway"]
+    models = cfg["model-catalog"]["operations"].get("EMBED", {}).get("models") or {}
+    return {k: int(v["embedding-dim"]) for k, v in models.items()
+            if str(v.get("provider", "")).lower() == REAL_PROVIDER and "embedding-dim" in v}
+
+
 def free_models_guard(key: str) -> list[tuple[str, str, str]]:
     models = catalog_real_models()
     if not models:
@@ -233,12 +242,38 @@ def run_live(pb, rpc, stub, models, c: Checks, tenant: str):
                 len(types) >= 1 and chunks[-1].WhichOneof("event") == "terminal"
                 and not any(b"[DONE]" in ch.data for ch in chunks))
 
-    if embed:
-        r = stub.Execute(req(embed[1], "EMBED", {"model": embed[1], "input": "hello"}), timeout=120)
+    # every real-arm EMBED model (incl. the retrieval-benchmark arms, G3): vector length must
+    # equal the catalog's embedding-dim, and the provider model ID must never appear downstream
+    dims = catalog_embed_dims()
+    for _, logical, pid in [m for m in models if m[0] == "EMBED"]:
+        r = stub.Execute(req(logical, "EMBED", {"model": logical, "input": "hello"}), timeout=120)
         body = r.result.decode() if r.result else ""
-        c.check(f"Execute EMBED {embed[1]} → SUCCESS with a vector",
-                r.state == pb.SUCCESS and len(json.loads(body)["data"][0]["embedding"]) > 0,
-                pb.ExecutionState.Name(r.state) + (f" code={r.error.code}" if r.error.code else ""))
+        n = len(json.loads(body)["data"][0]["embedding"]) if r.state == pb.SUCCESS and body else 0
+        c.check(f"Execute EMBED {logical} → SUCCESS, {dims.get(logical)}-dim vector (catalog embedding-dim)",
+                r.state == pb.SUCCESS and n == dims.get(logical) and pid not in body,
+                pb.ExecutionState.Name(r.state) + (f" code={r.error.code}" if r.error.code else "") + f" dim={n}")
+
+
+def run_benchmark_principal(pb, stub, models, c: Checks):
+    """synanton-benchmark (platform retrieval benchmark, B1-G G3) may act only for its rb-* tenants."""
+    import grpc
+    embed = next((m for m in models if m[0] == "EMBED"), None)
+    if embed is None:
+        return
+
+    def req(tenant):
+        return pb.ExecutionRequest(request_id=f"gpu7check-{uuid.uuid4()}", tenant_id=tenant, model=embed[1],
+                                   model_version="1", operation=pb.EMBED,
+                                   payload=json.dumps({"model": embed[1], "input": "hello"}).encode())
+    r = stub.Execute(req("rb-fixed-g"), timeout=120)
+    c.check(f"synanton-benchmark: EMBED {embed[1]} for rb-fixed-g → SUCCESS", r.state == pb.SUCCESS,
+            pb.ExecutionState.Name(r.state) + (f" code={r.error.code}" if r.error.code else ""))
+    try:
+        stub.Execute(req(SMOKE_TENANT), timeout=30)
+        c.check("synanton-benchmark: non-benchmark tenant → tenant_not_allowed", False, "no denial")
+    except grpc.RpcError as e:
+        c.check("synanton-benchmark: non-benchmark tenant → tenant_not_allowed",
+                trailer_code(e) == "tenant_not_allowed", str(e.code()))
 
 
 def compose_up(key_present: bool):
@@ -282,6 +317,17 @@ def main() -> int:
         run_live(pb, rpc, stub, models, c, args.tenant)
     except Exception as e:  # connection/handshake problems are failures, not crashes
         c.check("gateway reachable over mTLS", False, f"{type(e).__name__}: {e}")
+
+    bench_cert = Path(args.cert_dir) / "synanton-benchmark.crt"
+    if args.plaintext or not bench_cert.is_file():
+        print("SKIP  synanton-benchmark principal checks (plaintext, or no synanton-benchmark cert — re-run gen-certs.sh)")
+    else:
+        print("== benchmark principal (synanton-benchmark)")
+        try:
+            bstub = rpc.GPUExecutionServiceStub(channel(args.gateway, Path(args.cert_dir), "synanton-benchmark", False))
+            run_benchmark_principal(pb, bstub, models, c)
+        except Exception as e:
+            c.check("synanton-benchmark reachable over mTLS", False, f"{type(e).__name__}: {e}")
 
     spent_after = openrouter_get("/key", key)["data"].get("usage", 0)
     c.check(f"no spend on the capped key (usage ${spent_before} → ${spent_after})",

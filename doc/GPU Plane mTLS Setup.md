@@ -33,7 +33,7 @@ All keys are RSA-2048 and are written with mode `600`. Validity is 30 days by de
 
 ```bash
 cd deployments/external
-./scripts/gen-certs.sh                                  # → ./certs, clients: synanton-platform gpu7-smoke
+./scripts/gen-certs.sh                                  # → ./certs, clients: synanton-platform gpu7-smoke synanton-benchmark
 ./scripts/gen-certs.sh ./certs synanton-platform gpu7-smoke alice   # custom principals
 ./scripts/gen-certs.sh /tmp/gpu5-pki synanton-platform  # any output directory
 ```
@@ -67,7 +67,13 @@ gpu-gateway:
         roles: [admin]                          # routing-control RPCs
       gpu7-smoke:
         tenants: [smoke-tenant, smoke-budget-tenant]
+      synanton-benchmark:                       # platform retrieval benchmark (synquest/synflux,
+        tenants: [rb-fixed-g, rb-semantic-g,    #   gpu-plane profile): explicit tenants, never "*"
+                  rb-fixed-g-vl, rb-semantic-g-vl, rb-fixed-g-lfm, rb-semantic-g-lfm]
 ```
+
+Tenant matching is exact; only `"*"` is a wildcard. `tools/gpu7-package-check.py` rejects a
+non-admin principal with `"*"`.
 
 How each call is decided:
 

@@ -5,7 +5,7 @@
 # allowed tenants (gpu-gateway.security.principals.<CN>).
 #
 # Usage: gen-certs.sh [out-dir] [client-CN ...]
-#   defaults: out-dir=deployments/external/certs, clients=synanton-platform gpu7-smoke
+#   defaults: out-dir=deployments/external/certs, clients=synanton-platform gpu7-smoke synanton-benchmark
 #
 # Output (git-ignored — never commit keys):
 #   ca.crt  ca.key  server.crt  server.key  <cn>.crt  <cn>.key
@@ -15,7 +15,7 @@ set -euo pipefail
 OUT="${1:-$(cd "$(dirname "${BASH_SOURCE[0]}")/.." && pwd)/certs}"
 shift || true
 CLIENTS=("$@")
-[[ ${#CLIENTS[@]} -eq 0 ]] && CLIENTS=(synanton-platform gpu7-smoke)
+[[ ${#CLIENTS[@]} -eq 0 ]] && CLIENTS=(synanton-platform gpu7-smoke synanton-benchmark)
 DAYS="${CERT_DAYS:-30}"
 SANS="DNS:localhost,IP:127.0.0.1,DNS:gateway,DNS:gpu-gateway,DNS:gpu-gateway.gpu-plane.svc,DNS:gpu-gateway.gpu-plane.svc.cluster.local"
 
