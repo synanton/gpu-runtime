@@ -230,6 +230,18 @@ mTLS setup with self-signed certificates: [`doc/GPU Plane mTLS Setup.md`](doc/GP
 | **Implementation** | One workload per GPU (node1 TEI embedding, node2 vLLM reranker, node3 vLLM synthesis); Gateway routing ConfigMap; mTLS; streaming; **execution-JWT signing + JWKS (T-K8S-6a)**; static model readiness behind Envoy | **Complete:** mTLS + tenant authorization, provider registry, logical→provider rewrite, streaming, **Responses API**, canonical errors, circuit breaker, health, cost ledger, budget, sensitivity, kill switch (config + persisted runtime `GPUControlService`), multi-provider failover, upstream request IDs, zero-prompt logging verified, digest-pinned packaging |
 | **Acceptance** | **Cluster phase 5 passed:** EMBED/SYNTHESIZE/stream/RERANK through Gateway → Envoy (execution JWT) → the three GPUs; unsigned→401; direct backend access denied. Local end-to-end (`deployments/homelab/scripts/envoy-jwt-local-test.sh`) 17/17. **Pending:** load baselines and the full §24 suite | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md): opencode.ai arm 15/15 (current; cheap paid models, estimated spend $0.000063), OpenRouter free arm 20/20 (last run before OpenRouter became unreachable from this network); §46 checklist `tools/gpu7-package-check.py --live` 16/16. Freeze attestation (§49) awaits reviewer sign-off |
 
+**GPU-5 cluster phase 5 run (2026-09-25).** Single requests go through Gateway (gRPC mTLS, principal `synanton-platform`) → Envoy (ES256 execution JWT verified) → the GPU backends. Gateway image `gpu-gateway:0.1.0@sha256:8a747eb…`.
+
+| Operation | Backend | Result | Latency |
+|---|---|---|---|
+| EMBED | TEI `synanton-bge-base-embedding` (node1, GTX 1650) | 2 vectors × 768 dim | 166 ms |
+| SYNTHESIZE | vLLM `synanton-qwen3-4b-synthesis` (node3, RTX 5060 Ti) | "OK", logical model ID returned, usage 12 in / 2 out | 91 ms |
+| ExecuteStream | vLLM `synanton-qwen3-4b-synthesis` (node3) | 12 data chunks + exactly 1 SUCCESS terminal | 282 ms |
+| RERANK | vLLM `synanton-qwen3-reranker-0.6b` (node2, RTX 4060 Ti) | correct order: Paris 0.98 > bananas 0.898 | 74 ms |
+| Negative | Envoy / NetworkPolicy | unsigned request → 401; TEI, vLLM and JWKS unreachable from a non-Envoy pod | — |
+
+Idle VRAM after model load: node1 471 / 4096 MiB, node2 6229 / 16380 MiB, node3 13689 / 16311 MiB (vLLM preallocates KV cache at `--gpu-memory-utilization 0.90`). Load baselines are pending (`deployments/homelab/gpu-5-implementation-plan.md` §11).
+
 GPU-5 model state: Qwen3 weights verified; `bge-base-en-v1.5` complete on all nodes
 (mirrored); `bge-small-en-v1.5` fallback complete on all nodes. Manual downloads use a `uv` venv +
 `HF_ENDPOINT=https://hf-mirror.com` workaround (Local Models Setup §4).
