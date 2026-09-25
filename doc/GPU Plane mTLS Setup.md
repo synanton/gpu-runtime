@@ -35,7 +35,7 @@ All keys are RSA-2048 and are written with mode `600`. Validity is 30 days by de
 cd deployments/external
 ./scripts/gen-certs.sh                                  # → ./certs, clients: synanton-platform gpu7-smoke synanton-benchmark
 ./scripts/gen-certs.sh ./certs synanton-platform gpu7-smoke alice   # custom principals
-./scripts/gen-certs.sh /tmp/gpu5-pki synanton-platform  # any output directory
+./scripts/gen-certs.sh git-ignored/gpu5-pki synanton-platform  # any output directory
 ```
 
 Requires `openssl`. Re-running overwrites everything, including the CA. See §7 for
@@ -115,17 +115,17 @@ Generate the PKI on the admin workstation. Only the server material and the CA
 certificate go into the cluster:
 
 ```bash
-deployments/external/scripts/gen-certs.sh /tmp/gpu5-pki synanton-platform
+deployments/external/scripts/gen-certs.sh git-ignored/gpu5-pki synanton-platform
 
 kubectl -n gpu-plane create secret generic gpu-gateway-tls \
-  --from-file=server.crt=/tmp/gpu5-pki/server.crt \
-  --from-file=server.key=/tmp/gpu5-pki/server.key \
-  --from-file=ca.crt=/tmp/gpu5-pki/ca.crt
+  --from-file=server.crt=git-ignored/gpu5-pki/server.crt \
+  --from-file=server.key=git-ignored/gpu5-pki/server.key \
+  --from-file=ca.crt=git-ignored/gpu5-pki/ca.crt
 ```
 
 The blueprint (`blueprints/gateway/gateway.yaml`) and the Helm chart mount the secret
 at `/etc/gpu-gateway/tls` and register the principal `synanton-platform`
-(Helm: `gateway.platformPrincipal`). Keep `/tmp/gpu5-pki/ca.key` offline. It is only
+(Helm: `gateway.platformPrincipal`). `git-ignored/` (repo root) is git-ignored and survives reboots, unlike `/tmp`. Keep `git-ignored/gpu5-pki/ca.key` offline. It is only
 needed to issue new certificates.
 
 ## 6. Platform client (`platform/java/gateway`)

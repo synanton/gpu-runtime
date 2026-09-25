@@ -282,10 +282,10 @@ kubectl -n gpu-plane create secret generic gpu-gateway-jwt-keys \
   --from-file=current=es256-current.pem
 
 # Phase 6 — gRPC mTLS: self-signed PKI (doc/GPU Plane mTLS Setup.md); keep ca.key offline
-deployments/external/scripts/gen-certs.sh /tmp/gpu5-pki synanton-platform
+deployments/external/scripts/gen-certs.sh git-ignored/gpu5-pki synanton-platform
 kubectl -n gpu-plane create secret generic gpu-gateway-tls \
-  --from-file=server.crt=/tmp/gpu5-pki/server.crt --from-file=server.key=/tmp/gpu5-pki/server.key \
-  --from-file=ca.crt=/tmp/gpu5-pki/ca.crt
+  --from-file=server.crt=git-ignored/gpu5-pki/server.crt --from-file=server.key=git-ignored/gpu5-pki/server.key \
+  --from-file=ca.crt=git-ignored/gpu5-pki/ca.crt
 
 # Phase 2 — PostgreSQL credentials
 kubectl -n gpu-plane create secret generic gpu-postgres-cred \
@@ -302,7 +302,7 @@ Two levels, complementary:
 
 ```bash
 kubectl -n gpu-plane port-forward svc/gpu-gateway 9090:9090
-GPU_GRPC_CERT_DIR=/tmp/gpu5-pki GPU_GRPC_CLIENT=synanton-platform \
+GPU_GRPC_CERT_DIR=git-ignored/gpu5-pki GPU_GRPC_CLIENT=synanton-platform \
   tools/gpu-grpc-call.sh localhost:9090 GetModels '{"operation":"SYNTHESIZE"}'
 ./scripts/smoke-test.sh gateway          # same call via port-forward
 ```
