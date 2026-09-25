@@ -29,9 +29,12 @@ gpu-gateway:
       api-key: ${OPENAI_API_KEY:}    # §29: env-var reference, never inline, never logged
       base-url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}   # HTTPS only (§29)
       enabled: ${OPENAI_PROVIDER_ENABLED:false}  # opt-in real arm: needs OPENAI_API_KEY (else denied, not advertised)
-      headers:                # OpenRouter attribution (was hard-coded in the runtime)
+      # Spend guard for the capped test key: startup fails if any catalog model for this
+      # provider is not an OpenRouter free model (fail closed, Plan §5.5).
+      allowed-model-pattern: ".*:free"
+      headers:                # OpenRouter attribution (https://openrouter.ai/docs/quickstart)
         HTTP-Referer: https://synanton.ai
-        X-Title: Synanton GPU Gateway
+        X-OpenRouter-Title: Synanton GPU Gateway
       health:                 # [T-K8S-46] tracked independently of Gateway health
         path: /models
         interval-seconds: 60
@@ -61,12 +64,12 @@ gpu-gateway:
             is-default: true
             max-input-tokens: 8192
             max-output-tokens: 2048
-          gpt-4o-mini:        # real arm via OpenAi
+          synanton-free-chat:   # real arm (OpenRouter free model; verified 2026-09-25, cost 0)
             provider: OPENAI
-            provider-model-id: openai/gpt-4o-mini
-            display-name: "GPT-4o Mini"
-            max-input-tokens: 128000
-            max-output-tokens: 16384
+            provider-model-id: liquid/lfm-2.5-2.6b:free
+            display-name: "LFM 2.5 2.6B (OpenRouter free)"
+            max-input-tokens: 65536
+            max-output-tokens: 2048
       EMBED:
         default-model: synanton-mock-embedding
         models:
@@ -77,12 +80,16 @@ gpu-gateway:
             is-default: true
             max-input-tokens: 8192
             embedding-dim: 1536
-          text-embedding-3-small:   # platform benchmark's opt-in external arm
-            provider: OPENAI    # (platform/docs/research/retrieval-evaluation-benchmark-plan.md §3.3)
-            provider-model-id: openai/text-embedding-3-small
-            display-name: "OpenAI text-embedding-3-small"
+          synanton-free-embedding:  # real arm (OpenRouter free embedding model; cost 0)
+            provider: OPENAI
+            provider-model-id: nvidia/nemotron-3-embed-1b:free
+            display-name: "Nemotron 3 Embed 1B (OpenRouter free)"
             max-input-tokens: 8192
-            embedding-dim: 1536
+            embedding-dim: 2048
+          # Paid models (e.g. openai/text-embedding-3-small, the platform benchmark's
+          # opt-in arm) are rejected at startup by allowed-model-pattern while the
+          # capped test key is in use. No OpenRouter rerank model exists: RERANK on the
+          # real arm is capability_not_supported (§40).
       RERANK:
         default-model: synanton-mock-reranker
         models:

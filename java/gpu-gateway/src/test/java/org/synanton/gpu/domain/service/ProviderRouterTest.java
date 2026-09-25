@@ -205,4 +205,25 @@ class ProviderRouterTest {
                 .extracting(e -> ((RoutingDeniedException) e).getCode())
                 .isEqualTo("provider_not_configured");
     }
+
+    @Test
+    void allowedModelPatternRejectsPaidModelsAtStartup() {
+        // spend guard for a capped key: only OpenRouter ':free' models may be mapped
+        properties.getProviders().get("openai").setAllowedModelPattern(".*:free");
+
+        assertThatThrownBy(() -> new ProviderRouter(properties, new ModelCatalogService(properties)))
+                .isInstanceOf(IllegalStateException.class)
+                .hasMessageContaining("gpt-4o-mini")
+                .hasMessageContaining("allowed-model-pattern");
+    }
+
+    @Test
+    void allowedModelPatternAcceptsMatchingModels() {
+        catalog("SYNTHESIZE", "gpt-4o-mini", "OPENAI", "liquid/lfm-2.5-2.6b:free");
+        properties.getProviders().get("openai").setAllowedModelPattern(".*:free");
+
+        RoutingDecision d = new ProviderRouter(properties, new ModelCatalogService(properties))
+                .route(request("gpt-4o-mini", Operation.SYNTHESIZE));
+        assertThat(d.providerModelId()).isEqualTo("liquid/lfm-2.5-2.6b:free");
+    }
 }

@@ -63,8 +63,29 @@ public class ProviderRouter {
                     "dispatch.strategy=external but gpu-gateway.providers is empty — "
                             + "no route could ever succeed; failing closed per spec §5.5");
         }
+        validateAllowedModelPatterns(properties);
         log.info("ProviderRouter: strategy={} providers={}", strategy,
                 properties.getProviders().keySet());
+    }
+
+    /** Fail closed (§5.5) if a catalog model violates its provider's allowed-model-pattern. */
+    private static void validateAllowedModelPatterns(GpuGatewayProperties properties) {
+        properties.getModelCatalog().getOperations().forEach((op, models) ->
+                models.getModels().forEach((logicalId, info) -> {
+                    String providerId = info.getProvider() == null ? ""
+                            : info.getProvider().toLowerCase(java.util.Locale.ROOT);
+                    GpuGatewayProperties.ProviderConfig provider = properties.getProviders().get(providerId);
+                    if (provider == null || provider.getAllowedModelPattern() == null
+                            || provider.getAllowedModelPattern().isBlank()) {
+                        return;
+                    }
+                    String providerModelId = info.getProviderModelId() == null ? logicalId : info.getProviderModelId();
+                    if (!providerModelId.matches(provider.getAllowedModelPattern())) {
+                        throw new IllegalStateException("catalog model '" + logicalId + "' maps to '"
+                                + providerModelId + "', which violates providers." + providerId
+                                + ".allowed-model-pattern — failing closed per spec §5.5");
+                    }
+                }));
     }
 
     public boolean isExternal() {

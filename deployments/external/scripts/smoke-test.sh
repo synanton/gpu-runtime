@@ -104,5 +104,27 @@ call Execute "$req" >/dev/null
 out="$(call Execute "$(request "$RUN-idem" synanton-mock-chat SYNTHESIZE '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"DIFFERENT"}]}')")"
 [[ "$out" == *InvalidArgument* ]] && ok "request_id reuse with different payload → INVALID_ARGUMENT" || bad "idempotency conflict" "$out"
 
+if [[ "${SMOKE_REAL_PROVIDER:-0}" == "1" ]]; then
+  # Opt-in real external provider arm (OpenRouter FREE models only — the gateway refuses
+  # to start otherwise: providers.openai.allowed-model-pattern). Needs OPENAI_API_KEY and
+  # OPENAI_PROVIDER_ENABLED=true in .env. Four calls; free models are rate-limited.
+  echo "== real provider arm (OpenRouter free models)"
+  out="$(call Execute "$(request "$RUN-real-chat" synanton-free-chat SYNTHESIZE \
+    '{"model":"synanton-free-chat","messages":[{"role":"user","content":"Reply with exactly: OK"}],"max_tokens":16}')")"
+  [[ "$(field 'r.get("state")' <<<"$out")" == "SUCCESS" ]] && ok "real chat → SUCCESS" || bad "real chat" "$out"
+  [[ "$(field 'json.loads(res)["model"] if res else ""' <<<"$out")" == "synanton-free-chat" \
+     && "$(field '":free" in res' <<<"$out")" == "False" ]] \
+    && ok "real chat: logical ID restored, provider ID never exposed" || bad "real chat model ID" "$out"
+  out="$(call ExecuteStream "$(request "$RUN-real-stream" synanton-free-chat SYNTHESIZE \
+    '{"model":"synanton-free-chat","messages":[{"role":"user","content":"Count 1 to 3"}],"max_tokens":24}')")"
+  [[ "$out" == *'"terminal"'* && "$out" == *'"state": "SUCCESS"'* ]] && ok "real stream → terminal SUCCESS" || bad "real stream" "$out"
+  out="$(call Execute "$(request "$RUN-real-embed" synanton-free-embedding EMBED \
+    '{"model":"synanton-free-embedding","input":"hello"}')")"
+  [[ "$(field 'len(json.loads(res)["data"][0]["embedding"]) if res else 0' <<<"$out")" == "2048" ]] \
+    && ok "real embeddings → 2048-dim vector" || bad "real embeddings" "$out"
+  out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-real-rerank" synanton-free-chat RERANK '{"query":"q","documents":["a"]}')")"
+  [[ "$out" == *capability_not_supported* ]] && ok "real arm has no rerank → capability_not_supported" || bad "real rerank gap" "$out"
+fi
+
 echo "== $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

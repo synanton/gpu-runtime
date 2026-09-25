@@ -49,6 +49,12 @@ public class GpuGatewayProperties {
         private String apiKey;
         private String baseUrl;
         private boolean enabled = true;
+        /**
+         * Optional regex every catalog provider-model-id of this provider must match,
+         * checked at startup (fail closed). E.g. {@code .*:free} keeps a spend-capped
+         * test key on OpenRouter's free models only.
+         */
+        private String allowedModelPattern;
         /** Extra request headers sent to this provider (e.g. OpenRouter attribution). */
         private Map<String, String> headers = new HashMap<>();
         private Health health = new Health();
@@ -58,6 +64,8 @@ public class GpuGatewayProperties {
         public void setApiKey(String apiKey) { this.apiKey = apiKey; }
         public String getBaseUrl() { return baseUrl; }
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
+        public String getAllowedModelPattern() { return allowedModelPattern; }
+        public void setAllowedModelPattern(String allowedModelPattern) { this.allowedModelPattern = allowedModelPattern; }
         public Map<String, String> getHeaders() { return headers; }
         public void setHeaders(Map<String, String> headers) { this.headers = headers; }
         public boolean isEnabled() { return enabled; }

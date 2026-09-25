@@ -294,7 +294,11 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
 
         if (status == 401 || status == 403) {
             // auth failures are config faults, not provider health; don't trip the circuit
-            return failure("provider_auth_failed", "provider rejected credentials (HTTP " + status + ")",
+            // 401 = credentials; 403 may also be moderation or an upstream refusal
+            // (OpenRouter), so the message must not claim more than the status says
+            return failure("provider_auth_failed", status == 401
+                            ? "provider rejected credentials (HTTP 401)"
+                            : "provider refused the request (HTTP 403)",
                     false, RetryDisposition.DEFINITELY_FAILED);
         }
         if (status == 429) {
