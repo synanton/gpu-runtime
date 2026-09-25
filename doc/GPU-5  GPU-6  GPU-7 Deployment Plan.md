@@ -599,6 +599,44 @@ These requirements apply only to GPU-5.
 
 They do not apply to GPU-7.
 
+## 12.1 Implementation contract (T-K8S-6a)
+
+Fixed by T-K8S-6a (GPU-5 implementation plan §13).
+
+Token (compact JWS). Header `{"alg":"ES256","typ":"JWT","kid":<current kid>}`. Claims:
+
+| Claim | Value |
+|---|---|
+| `iss`, `aud` | `synanton-gpu-gateway`, `gpu-plane-execution` |
+| `iat`, `nbf`, `exp` | `exp = iat + ttl`. Default ttl 60 s, allowed 1–300 s (checked at startup). Envoy validates on arrival only. |
+| `jti` | Random UUID per upstream request |
+| `sub` | Caller mTLS principal, when known |
+| `tenant_id`, `request_id`, `op`, `model` | From the `ExecutionRequest`; `model` is the logical ID |
+| `body_sha256` | base64url(SHA-256(exact body bytes sent to Envoy)); an empty body for GET. Envoy enforcement of this claim is a T-K8S-6b follow-up. |
+
+The Gateway sends the token as `Authorization: Bearer <jws>` on every Gateway→Envoy request: execute, stream, liveness ping, and model-readiness poll when used.
+
+Keys: Secret `gpu-gateway-jwt-keys`, mounted at `gpu-gateway.execution-jwt.key-dir` (default `/etc/gpu-gateway/keys`).
+
+| File | Content |
+|---|---|
+| `current.key` | PKCS#8 PEM, EC P-256; the only signing key |
+| `current.pub`, `previous.pub` | SPKI PEM; the exactly-two published keys |
+
+Startup fails closed on any of these:
+- missing files;
+- SEC1 private-key format;
+- a curve other than P-256;
+- `current.key` and `current.pub` not a pair;
+- identical current and previous keys;
+- any other number of public keys.
+
+`kid` is the RFC 7638 JWK thumbprint. Only key IDs are logged.
+
+JWKS: a dedicated listener on `gpu-gateway.execution-jwt.jwks-port` (default 8090) serves exactly `GET /internal/.well-known/jwks.json` with `Cache-Control: max-age=300`. It is separate from actuator (:8091) and gRPC (:9090). The readiness contributor `executionJwt` is UP only once keys are loaded and the listener is bound.
+
+Rotation (T-K8S-25): previous := current, current := new key pair, then restart the Gateway. Tokens signed with the previous key keep verifying while it is published.
+
 ---
 
 # 13. Caller Authentication and Tenant Identity
