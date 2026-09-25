@@ -5,9 +5,10 @@
 # Run from deployments/external/ with the compose stack up:
 #   docker compose up -d && ./scripts/smoke-test.sh
 # Requires: grpcurl (https://github.com/fullstorydev/grpcurl/releases), python3.
-# Model IDs are the LOGICAL catalog IDs from config/gateway-external.yaml; the mock
-# provider only knows the provider IDs (mock-*-1), so every PASS below also proves
-# the logical → provider rewrite and that provider IDs never leak downstream.
+# Model IDs are the LOGICAL catalog IDs from config/gateway-external.yaml. The mock
+# runs with MOCK_STRICT_MODELS=1: it 404s any model except the provider IDs
+# (mock-*-1), so each SUCCESS proves the logical → provider rewrite upstream, and the
+# result checks prove provider IDs never leak downstream (PR #15 P1.1).
 set -euo pipefail
 
 GW="${GPU_GATEWAY_GRPC:-localhost:9090}"

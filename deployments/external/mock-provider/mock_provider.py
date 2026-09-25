@@ -12,6 +12,10 @@ Behavior knobs (env):
   MOCK_FAIL_RATE          0..1 fraction of requests that fail with HTTP 500
   MOCK_LATENCY_MS         artificial upstream latency before every response
   MOCK_RERANK_SUPPORTED   "0" -> /v1/rerank returns 400 (§40 capability gap)
+  MOCK_STRICT_MODELS      "1" (default) -> unknown model IDs return 404, as a real
+                          provider would. The Gateway must send PROVIDER model IDs
+                          (mock-*-1), so a SUCCESS through the Gateway proves the
+                          logical -> provider rewrite (PR #15 P1.1).
 
 Always: reports authoritative usage, echoes x-request-id back (§35 provider
 request-ID preservation), never logs request bodies (prompts).
@@ -28,6 +32,7 @@ PORT = int(os.environ.get("MOCK_PORT", "8080"))
 FAIL_RATE = float(os.environ.get("MOCK_FAIL_RATE", "0"))
 LATENCY_MS = int(os.environ.get("MOCK_LATENCY_MS", "0"))
 RERANK_SUPPORTED = os.environ.get("MOCK_RERANK_SUPPORTED", "1") == "1"
+STRICT_MODELS = os.environ.get("MOCK_STRICT_MODELS", "1") == "1"
 
 MODELS = ["mock-chat-1", "mock-embedding-1", "mock-reranker-1"]
 
@@ -124,6 +129,10 @@ class Handler(BaseHTTPRequestHandler):
             return self._send(404, {"error": {"message": "not found",
                                               "type": "invalid_request_error",
                                               "param": None, "code": "not_found"}}, rid)
+        if STRICT_MODELS and body.get("model") not in MODELS:
+            return self._send(404, {"error": {"message": "model not served by this provider",
+                                              "type": "invalid_request_error",
+                                              "param": "model", "code": "model_not_found"}}, rid)
         handler(body, rid)
 
     def _chat(self, body, rid):
