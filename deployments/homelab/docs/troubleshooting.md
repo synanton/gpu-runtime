@@ -66,7 +66,8 @@ kubectl -n gpu-plane get pods -l app=gpu-gateway    # Gateway must be Ready FIRS
 Causes, in order of likelihood: Gateway not ready yet (deploy gateway before
 envoy — `deploy.sh` phases do this); Gateway's JWT keys Secret missing
 (`gpu-gateway-jwt-keys`, created imperatively per plan §7); JWKS endpoint
-served on the wrong Gateway port (Envoy config targets :8090 `internal`).
+and — until T-K8S-6a lands — the Gateway does not serve JWKS at all, so this
+401 is the **expected** fail-closed state (plan §12.2), not a misconfiguration.
 
 ## Envoy up but backend unreachable (503/UF,upstream_reset)
 
@@ -85,10 +86,10 @@ inference Services listen on uniform `:8000` (the retracted colocation's
 ## Gateway not Ready / fails startup validation
 
 Spec §5.5 is deliberately fail-closed. Check `kubectl -n gpu-plane logs
-deploy/gpu-gateway` for: unsupported `GPU_DEPLOYMENT_MODE` (GPU-5 must be
-`local-only`), missing API-key pepper Secret, missing JWT key files,
-unreachable PostgreSQL, model registry entries pointing at Services that don't
-exist. Config errors must prevent readiness — don't paper over them by
+deploy/gpu-gateway` for: unsupported `gpu-gateway.dispatch.strategy` (GPU-5 uses
+`direct`), a missing `gpu-gateway-config` ConfigMap, unreachable PostgreSQL
+(`GPU_GATEWAY_DB_*`), or GatewayStartupValidator messages. Readiness is
+`/actuator/health/readiness` on :8091. Config errors must prevent readiness — don't paper over them by
 disabling validation.
 
 ## PostgreSQL PVC Pending

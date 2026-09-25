@@ -8,13 +8,14 @@ where, and why. Numbered decisions (D1–D7) live in
 ## Components and request path
 
 ```
-Client
-   │  HTTPS (Traefik ingressclass, self-signed cert — phase 8)
+Synanton Platform
+   │  gRPC synanton.gpu.v1 (Deployment Plan v3.0.0 §4; mTLS = T-K8S-7/8, pending)
    ▼
-gpu-gateway  (node1, CPU only — :8080 public API, :8090 internal JWKS, :8091 metrics)
+gpu-gateway  (node1, CPU only — :9090 gRPC API, :8091 actuator; JWKS :8090 reserved for T-K8S-6a)
    │  ES256 execution JWT, signed per request (spec §12)
    ▼
-envoy        (node1, CPU only — :8080, jwt_authn verifies against Gateway JWKS)
+envoy        (node1, CPU only — :8080, jwt_authn verifies against Gateway JWKS;
+              fails closed until T-K8S-6a ships JWT signing/JWKS)
    │  300 s upstream timeout (spec §31)
    ├─ /v1/chat/completions ─► vllm-synthesis  :8000 (node3, RTX 5060 Ti)
    ├─ /v1/embeddings       ─► tei-embedding   :8000 (node1, GTX 1650 — TEI, fp16)
@@ -60,7 +61,7 @@ data, small, benefits from replication; models don't).
 ## Security boundary (spec §43)
 
 ```text
-Public → Gateway → (signed JWT) → Envoy → inference backends (vLLM / TEI)
+Platform → Gateway (gRPC) → (signed JWT) → Envoy → inference backends (vLLM / TEI)
 ```
 
 - Direct client → backend and client → Envoy execution endpoint are denied by

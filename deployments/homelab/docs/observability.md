@@ -5,12 +5,12 @@ Normative requirements: spec §20 (zero-prompt), §20a (rate-limit metrics),
 
 ## Request IDs (spec §21)
 
-Every Gateway response carries `x-request-id`; a valid client-supplied value is
-preserved, missing ones are UUIDv4. Verify:
+The request ID is `ExecutionRequest.request_id` (gRPC transport, Plan v3.0.0 §21):
+every `ExecutionResponse` / `ExecutionStatus` / `ExecutionChunk` echoes it. Verify:
 
 ```bash
-curl -s -D - -o /dev/null -H "Authorization: Bearer $KEY" \
-  -H "x-request-id: gpu5-check-1" http://<gateway>/v1/models | grep -i x-request-id
+kubectl -n gpu-plane port-forward svc/gpu-gateway 9090:9090 &
+tools/gpu-grpc-call.sh localhost:9090 GetStatus '{"execution_id":"<id from an Execute>"}'
 ```
 
 Envoy forwards the header to vLLM (jwt_authn `forward: true` covers the JWT
