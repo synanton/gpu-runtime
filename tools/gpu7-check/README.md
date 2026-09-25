@@ -55,6 +55,28 @@ in `insecure-plaintext` mode). The exit code is non-zero on any failure.
 mTLS material comes from `deployments/external/scripts/gen-certs.sh`. See
 `doc/GPU Plane mTLS Setup.md`.
 
+## Embedding probe (retrieval benchmark G0)
+
+`embed_probe.py` characterises the free OpenRouter embedding models for the platform
+retrieval benchmark (platform `docs/research/retrieval-evaluation-benchmark-plan.md`,
+§6 Phase B1-G, step G0). It reports:
+
+- the key's free-model daily quota and spend;
+- each model's native dimension;
+- whether the provider honours the `dimensions` field;
+- a Matryoshka check: retrieval quality and neighbour order on the platform demo corpus
+  when vectors are cut to 1024/768/512/384 dims and L2-renormalised. Lucene 9.11 caps
+  KNN vectors at 1024 dims.
+
+The probe calls OpenRouter directly, since it measures the provider models themselves.
+It uses the same free-models guard and key handling as `gpu7_check.py`, and fails if
+spend changes. Each model costs 2 free requests.
+
+```bash
+python tools/gpu7-check/embed_probe.py \
+  --out ../platform/demo-data/eval/retrieval-benchmark/results/G0-embed-probe.json
+```
+
 ## Changing the free models
 
 OpenRouter's free catalog changes over time. List the current free models:
