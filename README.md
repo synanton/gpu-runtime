@@ -68,8 +68,8 @@ It acts as the exclusive bridge between the business logic of Synanton and the p
 │  └───────────────────────────┬───────────────────────────────┘  │
 │                              ▼                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
-│  │                  VllmRuntime                              │  │
-│  │  (Execution, Cancellation, Heartbeat, Status)             │  │
+│  │   ProviderRouter → VllmRuntime (GPU-5) |                  │  │
+│  │                    OpenAiProviderRuntime (GPU-7)          │  │
 │  └───────────────────────────┬───────────────────────────────┘  │
 │                              ▼                                  │
 │  ┌───────────────────────────────────────────────────────────┐  │
@@ -137,74 +137,64 @@ All non-terminal states can transition to `FAILED` or `CANCELLED`. Terminal stat
 
 
 ```text
-gpu-runtime/
-├── build.gradle.kts                     # Root build
-├── settings.gradle.kts
-├── gradle.properties
-│
-├── .cursor/
-│   └── rules/                           # AI-assisted development rules
-│       ├── java-rules.mdc               # Synanton Core Java conventions
-│       └── gpu-execution-rules.mdc      # GPU-specific invariants
+gpu-runtime/                               # generated from `git ls-files` (2026-09-25)
+├── build.gradle.kts · settings.gradle.kts · gradle.properties · gradle/libs.versions.toml
+├── .cursor/rules/                         # java-rules.mdc, gpu-execution-rules.mdc
+├── .github/workflows/                     # gradle.yml, gpu-contract-mirror.yml
 │
 ├── doc/
-│   ├── GPU-5  GPU-6  GPU-7 Deployment Plan.md   # Canonical deployment spec (v2.1.9)
-│   ├── GPU-5 Local Models Setup.md              # Node-local model download/verify (BGE + Qwen3)
+│   ├── GPU-5  GPU-6  GPU-7 Deployment Plan.md   # canonical spec v3.0.0 (gRPC platform transport)
+│   ├── GPU-5 Local Models Setup.md              # node-local model download/verify (uv venv)
 │   ├── TEST_ENVIRONMENT_SETUP.md
-│   ├── GPU Execution Plane Implementation Plan v1.20.md
-│   └── GPU Execution Plane Implementation Plan v1.21.md
+│   └── GPU Execution Plane Implementation Plan v1.20.md / v1.21.md
 │
 ├── deployments/
-│   ├── homelab/                         # [GPU-5] reference local-inference deployment
-│   │   ├── gpu-5-implementation-plan.md #   phased plan, decisions D1-D7, acceptance
-│   │   ├── claster-as-build.md          #   observed 4-node cluster inventory
-│   │   ├── blueprints/                  #   plain K8s manifests (phased bring-up)
-│   │   │   ├── tei/                     #   embedding (node1, GTX 1650, TEI turing build)
-│   │   │   ├── vllm/                    #   reranker (node2), synthesis (node3) — one
-│   │   │   │                            #   workload per physical GPU (PR #15 review)
-│   │   │   ├── postgres/                #   PostgreSQL 16 + Longhorn PVC (node1)
-│   │   │   ├── envoy/                   #   execution perimeter, ES256 JWT via JWKS
-│   │   │   ├── gateway/                 #   Gateway Deployment/Service
-│   │   │   └── network-policy/          #   default-deny + spec §19 flows
-│   │   ├── helm/gpu-plane/              #   packaged chart (post bring-up path)
-│   │   ├── docker/gateway.Dockerfile    #   T-K8S-1 image blueprint
-│   │   └── scripts/                     #   mirror-images / create-registry-secret / deploy /
-│   │                                    #   cluster-stop / cluster-start (safe power cycle)
-│   ├── external/                        # [GPU-7] external-provider profile (no GPU/Envoy/vLLM)
-│   │   ├── gpu-7-implementation-plan.md #   phased plan, T-K8S-38..53 mapping
-│   │   ├── compose.yaml                 #   single-node: gateway + postgres + mock-provider
-│   │   ├── config/gateway-external.yaml #   provider registry, mappings, kill switch, budget
-│   │   ├── mock-provider/               #   stdlib-only OpenAI-compatible mock (T-K8S-51)
-│   │   └── scripts/smoke-test.sh        #   positive/negative path checks (§37 subset)
-│   └── production/                      # [GPU-6] deferred — not a GPU-5/GPU-7 gate
+│   ├── homelab/                           # [GPU-5] local inference, one workload per GPU
+│   │   ├── gpu-5-implementation-plan.md   #   phased plan, decisions D1–D7, acceptance
+│   │   ├── claster-as-build.md            #   observed 4-node cluster inventory
+│   │   ├── blueprints/                    #   plain manifests (phased kubectl bring-up)
+│   │   │   ├── namespace.yaml
+│   │   │   ├── tei/embedding.yaml         #     node1 GTX 1650 — TEI, BGE-base
+│   │   │   ├── vllm/reranker.yaml         #     node2 RTX 4060 Ti — Qwen3-Reranker-0.6B
+│   │   │   ├── vllm/synthesis.yaml        #     node3 RTX 5060 Ti — Qwen3-4B
+│   │   │   ├── gateway/gateway.yaml       #     gRPC :9090, actuator :8091, routing ConfigMap
+│   │   │   ├── envoy/                     #     execution perimeter (jwt_authn)
+│   │   │   ├── postgres/postgres.yaml
+│   │   │   └── network-policy/network-policies.yaml
+│   │   ├── helm/gpu-plane/                #   chart mirroring the blueprints
+│   │   ├── docker/gateway.Dockerfile      #   gateway image (T-K8S-1)
+│   │   ├── docs/                          #   architecture, benchmarks, observability, troubleshooting
+│   │   └── scripts/                       #   mirror-images, build-and-push, create-registry-secret,
+│   │                                      #   deploy, smoke-test, record-vram, cluster-stop/start
+│   └── external/                          # [GPU-7] external providers (no GPU/Envoy/vLLM)
+│       ├── gpu-7-implementation-plan.md
+│       ├── compose.yaml                   #   gateway + PostgreSQL + mock provider
+│       ├── .env.example                   #   secrets template (.env is git-ignored)
+│       ├── config/gateway-external.yaml   #   providers, catalog, kill switch, budget, sensitivity
+│       ├── mock-provider/                 #   stdlib-only OpenAI-compatible mock (T-K8S-51)
+│       └── scripts/smoke-test.sh          #   gRPC acceptance smoke (+ opt-in OpenRouter free arm)
 │
 ├── java/
-│   ├── gpu-contract/                    # Shared gRPC protobuf contracts
-│   │   └── src/main/proto/synanton/gpu/v1/
-│   │       └── gpu_execution_service.proto  # Execute/Cancel/GetStatus/GetCapacity/GetModels
-│   │
-│   └── gpu-gateway/                     # Main Spring Boot service
-│       └── src/
-│           ├── main/java/org/synanton/gpu/
-│           │   ├── adapter/             # Hexagonal Architecture
-│           │   │   ├── in/              # gRPC, Schedules
-│           │   │   └── out/             # Database, Runtime, Registry, Security
-│           │   ├── domain/              # Use Cases, Models, Services
-│           │   └── config/
+│   ├── gpu-contract/                      # synanton.gpu.v1 — byte-identical mirror of platform
+│   │   └── src/main/proto/synanton/gpu/v1/gpu_execution_service.proto
+│   └── gpu-gateway/                       # Spring Boot service (gRPC API; actuator only on HTTP)
+│       └── src/main/
+│           ├── java/org/synanton/gpu/
+│           │   ├── adapter/in/grpc/       #   GpuExecutionGrpcAdapter (Execute, ExecuteStream, …)
+│           │   ├── adapter/out/runtime/   #   VllmRuntime, OpenAiProviderRuntime, SseRelay,
+│           │   │                          #   ProviderRuntimeRegistry, CircuitBreaker, ProviderHealthMonitor
+│           │   ├── adapter/out/database/  #   JdbcExecutionRepository, JdbcCostLedger
+│           │   ├── adapter/out/{registry,model,schedule}/
+│           │   ├── domain/service/        #   ExecuteService, ProviderRouter, ExternalRoutingPolicy, …
+│           │   ├── domain/{model,port}/
+│           │   └── config/                #   GpuGatewayProperties, GatewayStartupValidator, gRPC lifecycle
 │           └── resources/
 │               ├── application.yml
-│               ├── application-test.yml
-│               └── db/migration/        # Flyway V1 (executions), V2 (artifact cache)
+│               └── db/migration/          #   V1 executions, V2 cost_ledger, V3 upstream_request_id
 │
-├── scripts/
-│   └── verify-gpu-contract-mirror.sh    # proto mirror check vs platform repo
-│
-├── tools/
-│   └── gpu-plane-check.py               # manual test CLI for GPU-5/GPU-7 Gateways
-│                                        # (models/chat/stream/embed/rerank/negative;
-│                                        #  validates §10 SSE, §16 envelopes, §21 IDs)
-│
-└── README.md
+├── scripts/verify-gpu-contract-mirror.sh  # proto mirror check vs platform (in ./gradlew check)
+├── tools/gpu-grpc-call.sh                 # grpcurl wrapper for the gRPC contract
+└── README.md · LICENSE
 ```
 
 ------
@@ -396,7 +386,7 @@ Key properties in `application.yml` (all overridable via environment variables):
 | Property | Env var | Default | Purpose |
 |---|---|---|---|
 | `gpu-gateway.grpc-port` | `GPU_GATEWAY_GRPC_PORT` | `9090` | gRPC listen port |
-| `gpu-gateway.dispatch.strategy` | `GPU_GATEWAY_DISPATCH_STRATEGY` | `stub` | `stub` or `direct` (vLLM) |
+| `gpu-gateway.dispatch.strategy` | `GPU_GATEWAY_DISPATCH_STRATEGY` | `stub` | `stub`, `direct` (GPU-5 vLLM) or `external` (GPU-7 providers); anything else fails startup |
 | `gpu-gateway.dispatch.vllm-endpoint` | `VLLM_ENDPOINT` | `http://vllm-service:8000` | vLLM base URL |
 | `gpu-gateway.execution.lease-timeout-seconds` | `EXECUTION_LEASE_TIMEOUT_SECONDS` | `300` | Heartbeat lease window |
 | `gpu-gateway.execution.heartbeat-interval-seconds` | `EXECUTION_HEARTBEAT_INTERVAL_SECONDS` | `60` | Heartbeat fire interval |
