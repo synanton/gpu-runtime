@@ -1,66 +1,85 @@
 #!/usr/bin/env bash
-# GPU-7 smoke test — positive and negative paths against the Gateway (spec §37 subset).
-#
-# STATUS (PR #15 review): this targets the public OpenAI-compatible HTTP face
-# (:8080 /v1/...), which the current gateway build does NOT serve yet — the live
-# surface today is gRPC :9090 (Execute/Cancel/GetStatus/GetCapacity/GetModels).
-# The routing/runtime layer it exercises (provider registry, mock dispatch,
-# model-ID rewriting, SSE normalization, circuit breaker, kill switch) is
-# implemented and unit-tested in java/gpu-gateway. Run this script once the
-# HTTP-face ticket lands; until then it is the phase-4 acceptance target, not a
-# runnable check.
-#
-# Model IDs below match config/gateway-external.yaml (catalog) — keep in sync.
+# GPU-7 smoke test over the platform transport — gRPC synanton.gpu.v1
+# (Deployment Plan §4) — against the in-compose mock provider (§37 subset).
 #
 # Run from deployments/external/ with the compose stack up:
 #   docker compose up -d && ./scripts/smoke-test.sh
-# Requires: .env sourced (GPU_DEV_API_KEY), curl, python3.
+# Requires: grpcurl (https://github.com/fullstorydev/grpcurl/releases), python3.
+# Model IDs are the LOGICAL catalog IDs from config/gateway-external.yaml; the mock
+# provider only knows the provider IDs (mock-*-1), so every PASS below also proves
+# the logical → provider rewrite and that provider IDs never leak downstream.
 set -euo pipefail
 
-GW="${GPU_GATEWAY_URL:-http://localhost:8080}"
-KEY="${GPU_DEV_API_KEY:?source .env first}"
+GW="${GPU_GATEWAY_GRPC:-localhost:9090}"
+ROOT="$(cd "$(dirname "${BASH_SOURCE[0]}")/../../.." && pwd)"
+CALL="$ROOT/tools/gpu-grpc-call.sh"
+# shellcheck source=../../../tools/gpu-grpc-call.sh
+source "$CALL"
 PASS=0; FAIL=0
+RUN="smoke-$(date +%s)-$$"
 
-check() { # name expected_code actual_code
-  if [[ "$2" == "$3" ]]; then echo "PASS  $1"; PASS=$((PASS+1));
-  else echo "FAIL  $1 (want $2, got $3)"; FAIL=$((FAIL+1)); fi
+ok()  { echo "PASS  $1"; PASS=$((PASS+1)); }
+bad() { echo "FAIL  $1${2:+ — $2}"; FAIL=$((FAIL+1)); }
+
+# request <request_id> <logical model> <OPERATION> <payload-json>
+request() {
+  printf '{"request_id":"%s","tenant_id":"smoke-tenant","model":"%s","model_version":"1","operation":"%s","payload":"%s"}' \
+    "$1" "$2" "$3" "$(payload_b64 "$4")"
+}
+call() { "$CALL" "$GW" "$@" 2>&1 || true; }
+
+# json-field <expr> — evaluate a python expression over the Execute response `r`
+# (result bytes decoded as `res`) and print it.
+field() {
+  python3 -c '
+import sys, json, base64
+raw = sys.stdin.read()
+try:
+    r = json.loads(raw)
+except Exception:
+    print("<non-json:" + raw.strip()[:200] + ">"); sys.exit(0)
+res = base64.b64decode(r.get("result", "")).decode() if r.get("result") else ""
+print(eval(sys.argv[1]))' "$1"
 }
 
-code() { # method path json-body [extra curl args...]
-  local method="$1" path="$2" body="${3:-}"; shift 3 || true
-  if [[ -n "$body" ]]; then
-    curl -s -o /tmp/gpu7-smoke.json -w '%{http_code}' -X "$method" "$GW$path" \
-      -H "Authorization: Bearer $KEY" -H 'Content-Type: application/json' "$@" -d "$body"
-  else
-    curl -s -o /tmp/gpu7-smoke.json -w '%{http_code}' -X "$method" "$GW$path" \
-      -H "Authorization: Bearer $KEY" "$@"
-  fi
-}
+echo "== model discovery (GetModels)"
+out="$(call GetModels '{"operation":"SYNTHESIZE"}')"
+[[ "$out" == *synanton-mock-chat* ]] && ok "GetModels lists logical synanton-mock-chat" || bad "GetModels" "$out"
+[[ "$out" != *mock-chat-1* ]] && ok "GetModels never exposes provider model ID" || bad "provider ID leaked in GetModels"
 
-echo "== positive paths (mock provider)"
-check "models list"            200 "$(code GET  /v1/models)"
-check "chat completions"       200 "$(code POST /v1/chat/completions '{"model":"mock-chat-1","messages":[{"role":"user","content":"hi"}]}')"
-check "embeddings"             200 "$(code POST /v1/embeddings '{"model":"mock-embedding-1","input":"hello"}')"
-check "rerank (configured)"    200 "$(code POST /v1/rerank '{"model":"mock-reranker-1","query":"q","documents":["a","b"]}')"
+echo "== positive paths (Execute → ProviderRouter → mock provider)"
+out="$(call Execute "$(request "$RUN-chat" synanton-mock-chat SYNTHESIZE \
+  '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"hi"}]}')")"
+[[ "$(field 'r.get("state")' <<<"$out")" == "SUCCESS" ]] && ok "chat → SUCCESS" || bad "chat" "$out"
+[[ "$(field 'json.loads(res)["model"] if res else ""' <<<"$out")" == "synanton-mock-chat" ]] \
+  && ok "chat result carries logical model ID" || bad "chat logical model ID" "$out"
+[[ "$(field '"mock-chat-1" in res' <<<"$out")" == "False" ]] \
+  && ok "chat result never contains provider model ID" || bad "provider ID leaked in chat result"
+[[ "$(field 'int(r.get("usage",{}).get("inputTokens","0"))>0' <<<"$out")" == "True" ]] \
+  && ok "provider usage captured" || bad "usage" "$out"
 
-echo "== streaming: [DONE] exactly once, terminal usage present (§10)"
-curl -s -N -X POST "$GW/v1/chat/completions" -H "Authorization: Bearer $KEY" \
-  -H 'Content-Type: application/json' \
-  -d '{"model":"mock-chat-1","messages":[{"role":"user","content":"hi"}],"stream":true,"stream_options":{"include_usage":true}}' \
-  > /tmp/gpu7-sse.txt
-[[ "$(grep -c '^data: \[DONE\]$' /tmp/gpu7-sse.txt)" == "1" ]] \
-  && { echo "PASS  [DONE] once"; PASS=$((PASS+1)); } || { echo "FAIL  [DONE] count"; FAIL=$((FAIL+1)); }
-grep -q '"usage"' /tmp/gpu7-sse.txt \
-  && { echo "PASS  terminal usage"; PASS=$((PASS+1)); } || { echo "FAIL  terminal usage"; FAIL=$((FAIL+1)); }
+out="$(call Execute "$(request "$RUN-embed" synanton-mock-embedding EMBED \
+  '{"model":"synanton-mock-embedding","input":"hello"}')")"
+[[ "$(field 'r.get("state")' <<<"$out")" == "SUCCESS" ]] && ok "embeddings → SUCCESS" || bad "embeddings" "$out"
 
-echo "== negative paths (§16 envelope)"
-check "invalid api key"        401 "$(curl -s -o /tmp/gpu7-smoke.json -w '%{http_code}' -H 'Authorization: Bearer wrong' $GW/v1/models)"
-python3 -c "import json;e=json.load(open('/tmp/gpu7-smoke.json'))['error'];assert e['code']=='invalid_api_key'" \
-  && { echo "PASS  error code invalid_api_key"; PASS=$((PASS+1)); } || { echo "FAIL  error code"; FAIL=$((FAIL+1)); }
-check "unknown model"          404 "$(code POST /v1/embeddings '{"model":"nope","input":"x"}')"
-check "request-id echo"        200 "$(code GET /v1/models '' -H 'x-request-id: gpu7-smoke-1')"
-grep -q gpu7-smoke-1 <(curl -s -D - -o /dev/null -H "Authorization: Bearer $KEY" -H 'x-request-id: gpu7-smoke-1' "$GW/v1/models") \
-  && { echo "PASS  x-request-id preserved"; PASS=$((PASS+1)); } || { echo "FAIL  x-request-id"; FAIL=$((FAIL+1)); }
+out="$(call Execute "$(request "$RUN-rerank" synanton-mock-reranker RERANK \
+  '{"model":"synanton-mock-reranker","query":"q","documents":["a","b"]}')")"
+[[ "$(field 'r.get("state")' <<<"$out")" == "SUCCESS" ]] && ok "rerank (configured) → SUCCESS" || bad "rerank" "$out"
+
+echo "== negative paths (canonical denials, fail closed)"
+out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-nope" no-such-model SYNTHESIZE '{"model":"no-such-model"}')")"
+[[ "$out" == *NotFound* && "$out" == *model_not_found* ]] && ok "unknown model → NOT_FOUND model_not_found" || bad "unknown model" "$out"
+
+out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-cap" synanton-mock-chat RERANK '{"query":"q","documents":["a"]}')")"
+[[ "$out" == *capability_not_supported* ]] && ok "chat model on RERANK → capability_not_supported" || bad "capability gap" "$out"
+
+out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-local" synanton-mock-chat SYNTHESIZE '{"model":"x"}' | sed 's/}$/,"provider":"LOCAL"}/')")"
+[[ "$out" == *PermissionDenied* && "$out" == *no_local_fallback* ]] && ok "LOCAL request in external mode → no_local_fallback" || bad "no local fallback" "$out"
+
+req="$(request "$RUN-idem" synanton-mock-chat SYNTHESIZE '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"a"}]}')"
+call Execute "$req" >/dev/null
+out="$(call Execute "$(request "$RUN-idem" synanton-mock-chat SYNTHESIZE '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"DIFFERENT"}]}')")"
+[[ "$out" == *InvalidArgument* ]] && ok "request_id reuse with different payload → INVALID_ARGUMENT" || bad "idempotency conflict" "$out"
 
 echo "== $PASS passed, $FAIL failed"
 [[ $FAIL -eq 0 ]]

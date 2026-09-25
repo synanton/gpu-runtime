@@ -1,6 +1,6 @@
 # GPU-7 External Provider Deployment — Implementation Plan
 
-**Status:** Deployment contract defined; routing/runtime layer implemented (PR #15 review fixes); public HTTP face pending (acceptance blocked until it lands — see §8)
+**Status:** Deployment contract defined; transport is gRPC `synanton.gpu.v1` (Deployment Plan v3.0.0 §4); implementation state in §0
 **Revision date:** 2026-09-24
 **Canonical spec:** `../../doc/GPU-5  GPU-6  GPU-7 Deployment Plan.md` (§2.3, §5.4, §7, §26, §29, §32–§42, §44b, §46)
 **Consumer context:** `platform/docs/research/gpu-plane-integration-tickets.md` — the platform retrieval benchmark (T02/T03) is blocked until a reachable embedding endpoint exists; GPU-7 (external) and GPU-5 (local) are the two unblocking profiles.
@@ -46,15 +46,10 @@
 - Persisted routing control state (T-K8S-38; circuit-breaker state is in-memory
   per replica)
 
-**Not present in this build (acceptance blockers, §37):**
-
-- The public OpenAI-compatible **HTTP face** (`:8080 /v1/models`,
-  `/v1/chat/completions`, SSE to clients, API-key auth §13, §16 error envelopes,
-  §21 request IDs). The live API surface today is gRPC :9090
-  (`Execute/Cancel/GetStatus/GetCapacity/GetModels`).
-  `scripts/smoke-test.sh` and `tools/gpu-plane-check.py --profile gpu7` become
-  runnable when the HTTP-face ticket lands — they are the phase-4 acceptance
-  target, not current checks.
+**Transport:** the Gateway's API is gRPC `synanton.gpu.v1` on :9090 — the same
+contract the Platform consumes (Deployment Plan v3.0.0 §4.1). There is no
+OpenAI-compatible REST face; the Responses API is deferred (§4.6).
+`scripts/smoke-test.sh` exercises the packaged stack over gRPC (`tools/gpu-grpc-call.sh`).
 
 ---
 
@@ -121,7 +116,7 @@ deployments/external/
 
 Rerank (§40): advertised only when the provider/model mapping supports it — with the
 mock provider it is supported (`MOCK_RERANK_SUPPORTED=1`); when a provider lacks
-rerank, `/v1/rerank` must return `capability_not_supported` (§16), never a silent
+rerank, RERANK executions must fail with `capability_not_supported` (§16), never a silent
 conversion to another operation.
 
 ## 4. Phased bring-up
@@ -137,30 +132,25 @@ Then, from `deployments/external/`:
 
 | Phase | Tickets | Action | Exit criteria |
 |---|---|---|---|
-| 0 | — | `cp .env.example .env` and fill in; `docker compose up -d postgres mock-provider` | both healthy; mock answers `GET /v1/models` directly on :18080 |
+| 0 | — | `cp .env.example .env` and fill in; `docker compose up -d postgres mock-provider` | both healthy; mock answers `GET /v1/models` directly on :18080 (provider-side HTTP) |
 | 1 | T-K8S-38/39/44 | routing control state + kill switch + mode validation | gateway with `mode=local-only` or `auto` refuses readiness; kill switch on → external calls denied |
-| 2 | T-K8S-40..43 | provider registry, model mapping, adapter, credentials | `GET /v1/models` lists only mock-mapped models (§4.4: nothing advertised that can't resolve) |
-| 3 | T-K8S-45..50 | circuit breaker, health, usage, cost ledger, budget, sensitivity, error mapping | usage rows in PostgreSQL; budget exhaustion → 429 `budget_exceeded`; provider 5xx → 502 `upstream_provider_error`; timeout → 504 |
+| 2 | T-K8S-40..43 | provider registry, model mapping, adapter, credentials | `GetModels` lists only mock-mapped models by logical ID (§4.4: nothing advertised that can't resolve) |
+| 3 | T-K8S-45..50 | circuit breaker, health, usage, cost ledger, budget, sensitivity, error mapping | ledger rows in PostgreSQL; budget exhaustion → `RESOURCE_EXHAUSTED` `budget_exceeded`; provider 5xx → `upstream_provider_error`; timeout → `upstream_provider_timeout` |
 | 4 | T-K8S-51 | acceptance suite against mock provider | §37 checklist green (below) |
 | 5 | T-K8S-52/53 | multi-provider routing; package freeze | §46 packaging checklist green |
 
-Smoke test at any point after phase 2: `./scripts/smoke-test.sh` (curl-based), or the
-richer repo-root CLI (validates §10 streaming, §16 envelopes, §21 request IDs):
+Smoke test at any point after phase 2 (requires `grpcurl`):
 
 ```bash
-tools/gpu-plane-check.py --profile gpu7 --api-key "$GPU_DEV_API_KEY" all
+./scripts/smoke-test.sh                      # packaged stack, gRPC :9090
+../../tools/gpu-grpc-call.sh localhost:9090 GetModels '{"operation":"SYNTHESIZE"}'
 ```
 
 ## 5. Acceptance (spec §37 — T-K8S-51, all against the mock provider)
 
-`/v1/models` returns external models · chat routes to provider · embeddings route · rerank routes when configured · Responses API routes when supported · streaming preserved · provider usage captured · provider request IDs preserved · cost ledger records usage · budget enforcement works · sensitivity policy blocks prohibited routing · kill switch fails closed · circuit breaker works · provider errors map through §16 · provider timeouts map through §16 · **no local fallback** · no Envoy · no vLLM · no execution JWT.
+`GetModels` returns external models · chat routes to provider · embeddings route · rerank routes when configured · streaming (`ExecuteStream`) preserved · provider usage captured · provider request IDs preserved · cost ledger records usage · budget enforcement works · sensitivity policy blocks prohibited routing · kill switch fails closed · circuit breaker works · provider errors map through §16 · provider timeouts map through §16 · **no local fallback** · no Envoy · no vLLM · no execution JWT.
 
-Executable today (unit level, `java/gpu-gateway`): provider routing incl. mock,
-no-local-fallback, kill switch, model-ID rewriting (unary + every SSE chunk), SSE
-preservation with exactly-one `[DONE]` and terminal usage, provider 500/timeout/401
-canonical mapping, circuit-open denial without provider call, capability gaps.
-Blocked on the HTTP face: everything exercised via `:8080` (§37 acceptance run,
-API-key auth, §16 envelopes, §21 request IDs).
+Executable forms: unit/component tests in `java/gpu-gateway` and `scripts/smoke-test.sh` against the packaged compose stack (both over the gRPC contract).
 
 ## 6. Secrets
 

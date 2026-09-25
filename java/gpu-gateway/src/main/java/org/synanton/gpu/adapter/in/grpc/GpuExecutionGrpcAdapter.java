@@ -52,41 +52,64 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
             Execution execution = executeUseCase.execute(request);
             observer.onNext(responseMapper.toExecutionResponse(execution));
             observer.onCompleted();
-        } catch (RoutingDeniedException e) {
-            // Fail-closed routing denial (PR #15 §5): never admitted, never dispatched.
-            // PERMISSION_DENIED covers kill-switch/no-local-fallback; NOT_FOUND covers
-            // unknown model; FAILED_PRECONDITION covers the rest (provider misconfig).
-            Status grpcStatus = switch (e.getCode()) {
-                case "routing_disabled", "no_local_fallback", "provider_unavailable" ->
-                        Status.PERMISSION_DENIED.withDescription(e.getCode() + ": " + e.getMessage());
-                case "model_not_found" ->
-                        Status.NOT_FOUND.withDescription(e.getCode() + ": " + e.getMessage());
-                default ->
-                        Status.FAILED_PRECONDITION.withDescription(e.getCode() + ": " + e.getMessage());
-            };
-            log.warn("Routing denied: code={} request_id={}", e.getCode(), request.getRequestId());
-            observer.onError(grpcStatus.asRuntimeException());
-        } catch (RequestIdReuseException e) {
-            log.warn("RequestId reuse detected: request_id={}", e.getRequestId());
-            observer.onError(Status.INVALID_ARGUMENT
-                    .withDescription("request_id reused with different payload")
-                    .asRuntimeException());
-        } catch (AdmissionException e) {
-            Status grpcStatus = switch (e.getRejection()) {
-                case INVALID_ARGUMENT -> Status.INVALID_ARGUMENT.withDescription(e.getMessage());
-                case MODEL_NOT_FOUND -> Status.NOT_FOUND.withDescription(e.getMessage());
-                case CONCURRENCY_LIMIT,
-                     CAPACITY_EXCEEDED,
-                     GPU_QUOTA_EXCEEDED -> Status.RESOURCE_EXHAUSTED.withDescription(e.getMessage());
-            };
-            log.warn("Admission rejected: {} request_id={}", e.getRejection(), request.getRequestId());
-            observer.onError(grpcStatus.asRuntimeException());
         } catch (Exception e) {
-            log.error("Unexpected error in Execute: request_id={}", request.getRequestId(), e);
-            observer.onError(Status.INTERNAL
-                    .withDescription("Internal error; check Gateway logs")
-                    .asRuntimeException());
+            observer.onError(toDenial(e, request.getRequestId()));
         }
+    }
+
+    /**
+     * Maps a pre-execution denial to a gRPC status carrying the canonical code
+     * (Deployment Plan §16.2) in the {@code x-synanton-error-code} trailer and as the
+     * description prefix. Shared by Execute and ExecuteStream so both RPCs report
+     * identical status/code pairs.
+     */
+    static io.grpc.StatusRuntimeException toDenial(Exception e, String requestId) {
+        Status status;
+        String code;
+        String message;
+        if (e instanceof RoutingDeniedException rd) {
+            code = rd.getCode();
+            message = rd.getMessage();
+            status = switch (code) {
+                case "routing_disabled", "no_local_fallback", "sensitive_model_external_blocked" ->
+                        Status.PERMISSION_DENIED;
+                case "provider_unavailable", "budget_state_unavailable" -> Status.UNAVAILABLE;
+                case "budget_exceeded" -> Status.RESOURCE_EXHAUSTED;
+                case "model_not_found" -> Status.NOT_FOUND;
+                default -> Status.FAILED_PRECONDITION; // capability_not_supported, provider_not_configured
+            };
+            log.warn("Routing denied: code={} request_id={}", code, requestId);
+        } else if (e instanceof RequestIdReuseException) {
+            code = "idempotency_conflict";
+            message = "request_id reused with a different request";
+            status = Status.INVALID_ARGUMENT;
+            log.warn("RequestId reuse detected: request_id={}", requestId);
+        } else if (e instanceof AdmissionException ae) {
+            message = ae.getMessage();
+            switch (ae.getRejection()) {
+                case INVALID_ARGUMENT -> { status = Status.INVALID_ARGUMENT; code = "invalid_request"; }
+                case MODEL_NOT_FOUND -> { status = Status.NOT_FOUND; code = "model_not_found"; }
+                case CONCURRENCY_LIMIT -> { status = Status.RESOURCE_EXHAUSTED; code = "concurrency_limit_reached"; }
+                default -> { status = Status.RESOURCE_EXHAUSTED; code = "capacity_exceeded"; }
+            }
+            log.warn("Admission rejected: {} request_id={}", ae.getRejection(), requestId);
+        } else {
+            code = "internal_error";
+            message = "Internal error; check Gateway logs";
+            status = Status.INTERNAL;
+            log.error("Unexpected error: request_id={}", requestId, e);
+        }
+        return status.withDescription(code + ": " + message).asRuntimeException(errorCodeTrailers(code));
+    }
+
+    /** Trailer key carrying the canonical error code (Deployment Plan §16). */
+    public static final io.grpc.Metadata.Key<String> ERROR_CODE_KEY =
+            io.grpc.Metadata.Key.of("x-synanton-error-code", io.grpc.Metadata.ASCII_STRING_MARSHALLER);
+
+    static io.grpc.Metadata errorCodeTrailers(String code) {
+        io.grpc.Metadata trailers = new io.grpc.Metadata();
+        trailers.put(ERROR_CODE_KEY, code);
+        return trailers;
     }
 
     @Override

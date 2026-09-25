@@ -39,6 +39,7 @@ import java.util.Optional;
 public class ExecuteService implements ExecuteUseCase {
 
     private final RequestCanonicalizer canonicalizer;
+    private final AdmissionService admissionService;
     private final IdempotencyService idempotencyService;
     private final ExecutionAdmissionService executionAdmissionService;
     private final ExecutionRepository executionRepository;
@@ -52,6 +53,7 @@ public class ExecuteService implements ExecuteUseCase {
 
     @Override
     public Execution execute(ExecutionRequest request) {
+        admissionService.validateFields(request); // §21: invalid_request before anything else
         String requestHash = canonicalizer.canonicalize(request);
 
         // Fast path: idempotency hit — return existing execution without entering a transaction

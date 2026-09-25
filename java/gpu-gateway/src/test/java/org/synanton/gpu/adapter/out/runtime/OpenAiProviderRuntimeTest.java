@@ -243,7 +243,7 @@ class OpenAiProviderRuntimeTest {
         var result = impatient.execute(request(false), target());
 
         var failure = (ExecutionRuntime.RuntimeResult.Failure) result;
-        assertThat(failure.error().code()).isEqualTo("provider_timeout");
+        assertThat(failure.error().code()).isEqualTo("upstream_provider_timeout");
     }
 
     @Test

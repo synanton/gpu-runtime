@@ -9,7 +9,7 @@
 #   embed      phase 3 - embeddings against tei-embedding (node1)
 #   rerank     phase 3 - rerank against vllm-reranker (node2)
 #   envoy      phase 5 - NEGATIVE: unsigned request must be rejected (401)
-#   gateway    phase 6+ - GET /v1/models through the Gateway (needs GPU_DEV_API_KEY)
+#   gateway    phase 4+ - GetModels over the platform transport (gRPC :9090, needs grpcurl)
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-gpu-plane}"
@@ -72,12 +72,12 @@ case "${CMD}" in
     fi
     ;;
   gateway)
-    KEY="${GPU_DEV_API_KEY:?set GPU_DEV_API_KEY (a sk-syn-... key issued per T-K8S-8a)}"
-    pid=$(pf gpu-gateway 18090 8080)
+    # platform transport is gRPC synanton.gpu.v1 (Deployment Plan §4)
+    pid=$(pf gpu-gateway 19090 9090)
     trap 'kill "${pid}" 2>/dev/null || true' EXIT
-    echo "-- GET /v1/models through the Gateway"
-    curl -sf http://localhost:18090/v1/models -H "Authorization: Bearer ${KEY}"
-    echo
+    echo "-- GetModels (SYNTHESIZE) through the Gateway"
+    "$(dirname "${BASH_SOURCE[0]}")/../../../tools/gpu-grpc-call.sh" localhost:19090 GetModels \
+      '{"operation":"SYNTHESIZE"}'
     ;;
   *)
     echo "usage: $0 <synthesis|embed|rerank|envoy|gateway>" >&2

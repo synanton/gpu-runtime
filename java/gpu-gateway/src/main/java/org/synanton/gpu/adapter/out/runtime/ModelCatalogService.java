@@ -138,7 +138,8 @@ public class ModelCatalogService {
                         .setDisplayName(modelInfo.getDisplayName())
                         .setProvider(modelInfo.getProvider())
                         .setOperation(request.getOperation())
-                        .setProviderModelId(modelInfo.getProviderModelId())
+                        // provider_model_id is deliberately NOT populated: provider model
+                        // IDs are never exposed downstream (PR #15 invariant 3).
                         .setIsDefault(modelInfo.isDefault())
                         .setMaxInputTokens(modelInfo.getMaxInputTokens())
                         .setMaxOutputTokens(modelInfo.getMaxOutputTokens())

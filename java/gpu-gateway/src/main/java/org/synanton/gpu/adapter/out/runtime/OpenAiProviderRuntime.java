@@ -43,7 +43,7 @@ import java.util.Map;
  *   <li><b>P1.2 streaming:</b> SSE frames are forwarded as they arrive; usage-bearing
  *       terminal chunks are preserved; {@code data: [DONE]} is emitted exactly once.</li>
  *   <li><b>Canonical errors:</b> provider 5xx → {@code upstream_provider_error},
- *       timeout → {@code provider_timeout}, connect failure → {@code provider_unavailable},
+ *       timeout → {@code upstream_provider_timeout}, connect failure → {@code provider_unavailable},
  *       auth → {@code provider_auth_failed}, 4xx capability gaps →
  *       {@code capability_not_supported}, open circuit → {@code circuit_open}
  *       (denied <i>without</i> a provider call).</li>
@@ -106,7 +106,7 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
                     RetryDisposition.NOT_ACCEPTED);
         } catch (HttpTimeoutException e) {
             circuitBreaker.onFailure();
-            return failure("provider_timeout", "provider request timed out", false,
+            return failure("upstream_provider_timeout", "provider request timed out", false,
                     RetryDisposition.ACCEPTED_UNKNOWN);
         } catch (IOException e) {
             circuitBreaker.onFailure();
@@ -151,7 +151,7 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
                     RetryDisposition.NOT_ACCEPTED);
         } catch (HttpTimeoutException e) {
             circuitBreaker.onFailure();
-            return failure("provider_timeout", "provider stream timed out", false,
+            return failure("upstream_provider_timeout", "provider stream timed out", false,
                     RetryDisposition.ACCEPTED_UNKNOWN);
         } catch (IOException e) {
             circuitBreaker.onFailure();

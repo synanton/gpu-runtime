@@ -1,16 +1,18 @@
 # Synanton GPU Plane — Deployment Specification
 
-**Version:** 1.0.0
-**Status:** Execution baseline — pre-implementation
-**Revision date:** 2026-09-21
-**Supersedes:** None
+**Version:** 3.0.0
+**Status:** Implementation baseline — platform transport is gRPC `synanton.gpu.v1` (§4)
+**Revision date:** 2026-09-25
+**Supersedes:** 2.1.9 (OpenAI-compatible REST revision; see §47)
 **Superseded by:** None
 
 ---
 
 ## 1. Purpose
 
-This document defines the deployment, security, API compatibility, runtime, observability, acceptance, and operational requirements for the Synanton GPU Plane.
+This document defines the deployment, security, platform-transport contract, runtime, observability, acceptance, and operational requirements for the Synanton GPU Plane.
+
+The GPU Plane's API is the gRPC contract `synanton.gpu.v1` consumed by the Synanton Platform (§4). There is no OpenAI-compatible REST API.
 
 The specification covers three deployment stages:
 
@@ -31,9 +33,9 @@ GPU-6 is a production-hardening stage and is **not a prerequisite or release gat
 ## 2.1 GPU-5 Request Topology
 
 ```text
-Client
+Synanton Platform
   |
-  | HTTPS
+  | gRPC synanton.gpu.v1 (:9090)
   v
 Gateway
   |
@@ -49,7 +51,7 @@ vLLM
 Local GPU
 ```
 
-The Gateway is the public API boundary.
+The Gateway is the sole entry point of the GPU Plane; its API is the gRPC contract (§4).
 
 Envoy is a separate Deployment and Service. It is not a sidecar to the Gateway.
 
@@ -67,10 +69,10 @@ Reference Kubernetes topology:
 
 ```text
                          +-------------------+
-                         |      Client       |
+                         | Synanton Platform |
                          +---------+---------+
                                    |
-                                   | HTTPS
+                                   | gRPC synanton.gpu.v1
                                    v
                          +-------------------+
                          |      Gateway      |
@@ -103,13 +105,13 @@ PostgreSQL is used by the Gateway for persistent control-plane state but is not 
 GPU-7 removes the local execution perimeter:
 
 ```text
-Client
+Synanton Platform
   |
-  | HTTPS
+  | gRPC synanton.gpu.v1 (:9090)
   v
 Gateway
   |
-  | HTTPS
+  | HTTPS (OpenAI-compatible provider API)
   v
 External Provider
 ```
@@ -134,17 +136,17 @@ The following sections are canonical definitions:
 
 | Contract                        | Canonical section                   |
 | ------------------------------- | ----------------------------------- |
-| Public API surface              | §4.2                                |
-| API compatibility               | §4.1                                |
-| Responses API                   | §4.6                                |
+| Platform transport (gRPC RPCs)  | §4.2                                |
+| Transport decision              | §4.1                                |
+| Responses API (deferred)        | §4.6                                |
 | Image/version pinning           | §8                                  |
 | Runtime baseline                | §9                                  |
 | Streaming                       | §10                                 |
 | Error envelope and mapping      | §16                                 |
-| Rate limits and quota signaling | §20a                                |
+| Quota and admission signaling   | §20a                                |
 | Request IDs                     | §21                                 |
-| OpenAPI artifact                | `gpu-contract/openapi/openapi.yaml` |
-| OpenAPI validation ownership    | T-K8S-15b                           |
+| Contract artifact (protobuf)    | `java/gpu-contract/src/main/proto/synanton/gpu/v1/gpu_execution_service.proto` |
+| Contract validation ownership   | T-K8S-15a (§15)                     |
 
 Where a concept is repeated for readability, the canonical section is authoritative. Other occurrences are summaries, implementation references, or ticket-specific acceptance criteria.
 
@@ -152,183 +154,74 @@ Ticket sections do not create alternate API definitions.
 
 ---
 
-# 4. External API
+# 4. Platform Transport (gRPC)
 
-## 4.1 Compatibility Objective
+## 4.1 Transport Decision
 
-The Gateway exposes an OpenAI-compatible external API for supported inference operations.
+**Revision 3.0.0 (PR #15):** the GPU Plane's API is the gRPC service `synanton.gpu.v1.GPUExecutionService`, not an OpenAI-compatible REST API.
 
-Compatibility includes:
+Rationale:
 
-* endpoint paths;
-* request schemas;
-* response schemas;
-* authentication conventions;
-* HTTP status codes;
-* error envelopes;
-* relevant HTTP headers;
-* streaming SSE behavior;
-* usage reporting;
-* rate-limit signaling;
-* request IDs.
+* the Synanton Platform — the GPU Plane's only client — integrates through `synanton.gpu.v1` (`platform/java/gateway/.../GpuExecutionClient`, gRPC on port `9090`);
+* Platform Architecture 1.0 §8 requires the GPU runtime to conform to the **Platform-owned contract**, which is this protobuf contract;
+* one transport avoids two divergent public contracts.
 
-Compatibility does **not** imply support for every OpenAI API feature.
+The earlier OpenAI-compatible REST surface (`/v1/models`, `/v1/chat/completions`, `/v1/embeddings`, `/v1/rerank`, `/v1/responses`), API-key headers and HTTP error envelopes are **removed from this specification**. The GPU Plane does not serve them. OpenAI-compatible JSON survives only *inside* the contract, as the `ExecutionRequest.payload` / `ExecutionResponse.result` / `ExecutionChunk.data` bytes exchanged with the runtimes.
 
-Unsupported capabilities MUST be explicitly documented and MUST return the deterministic error envelope defined in §4.3 and §16.
-
-The `/v1` path is independent of the OpenAPI contract revision.
-
-The canonical OpenAPI contract is:
+The canonical contract artifact is:
 
 ```text
-gpu-contract/openapi/openapi.yaml
+java/gpu-contract/src/main/proto/synanton/gpu/v1/gpu_execution_service.proto
 ```
 
-The Gateway-packaged OpenAPI artifact MUST be generated or copied from the canonical artifact.
+It is **byte-identical** in `gpu-runtime` and `platform` and CI-enforced by `scripts/verify-gpu-contract-mirror.sh` (§15). A contract change is made in both repositories in the same change set.
 
-It MUST NOT be independently authored.
+## 4.2 RPCs — Canonical API Surface
 
-CI MUST enforce equality between the canonical artifact and the packaged artifact.
+| RPC | Semantics | GPU-5 | GPU-7 |
+| --- | --- | :---: | :---: |
+| `Execute(ExecutionRequest) → ExecutionResponse` | Unary SYNTHESIZE / EMBED / RERANK; blocks until completion or deadline | Yes | Yes |
+| `ExecuteStream(ExecutionRequest) → stream ExecutionChunk` | Streaming SYNTHESIZE (§10) | Yes | Yes |
+| `Cancel(CancelRequest) → CancelResponse` | Best-effort cancellation | Yes | Yes (no-op for providers without cancellation) |
+| `GetStatus(GetStatusRequest) → ExecutionStatus` | Authoritative status; lazy lease reconciliation | Yes | Yes |
+| `GetCapacity(GetCapacityRequest) → CapacityResponse` | Advisory capacity | Yes | Yes |
+| `GetModels(GetModelsRequest) → GetModelsResponse` | Model discovery (§4.4) | Yes | Yes |
 
-T-K8S-15b owns:
+The operation is selected by `ExecutionRequest.operation` (`SYNTHESIZE`, `EMBED`, `RERANK`), not by path. RERANK is available only where the model/provider mapping supports it (§40).
 
-* OpenAPI lint;
-* contract validation;
-* compatibility tests;
-* breaking-change detection;
-* canonical/package equality.
+Ports: gRPC `9090`; actuator health/metrics `8091` (HTTP, not an API surface).
 
----
+## 4.3 Out of Scope
 
-## 4.2 Endpoints — Canonical API Surface
+The following are outside the contract and are not served:
 
 ```text
-GET    /v1/models
-GET    /v1/models/{model}
-
-POST   /v1/chat/completions
-POST   /v1/embeddings
-POST   /v1/rerank
-
-POST   /v1/responses
-GET    /v1/responses/{id}
-DELETE /v1/responses/{id}
+OpenAI REST API (any /v1/* path)            OpenAI Responses API
+moderations, audio, images, files           fine-tuning, batches
+assistants, vector stores, threads          API-key (sk-syn-/syn_live_) auth
 ```
 
-Capability availability:
-
-| Endpoint                    |                            GPU-5 |                           GPU-7 |
-| --------------------------- | -------------------------------: | ------------------------------: |
-| `/v1/models`                |                              Yes |                             Yes |
-| `/v1/models/{model}`        |                              Yes |                             Yes |
-| `/v1/chat/completions`      |                              Yes |                             Yes |
-| `/v1/embeddings`            |                              Yes |                             Yes |
-| `/v1/rerank`                |                              Yes | When provider/model supports it |
-| `/v1/responses`             | Not required in current baseline |             Yes, when supported |
-| `/v1/responses/{id}`        | Not required in current baseline |             Yes, when supported |
-| `DELETE /v1/responses/{id}` | Not required in current baseline |             Yes, when supported |
-
----
-
-## 4.3 OpenAI API Surfaces Out of Scope
-
-The following surfaces are outside the current compatibility contract:
-
-```text
-/v1/moderations
-/v1/audio/*
-/v1/images/*
-/v1/files
-/v1/fine_tuning/*
-/v1/batches
-/v1/assistants/*
-/v1/vector_stores/*
-/v1/threads/*
-```
-
-Requests to unsupported surfaces MUST return HTTP 400 using:
-
-```json
-{
-  "error": {
-    "message": "The requested capability is not supported by this deployment.",
-    "type": "invalid_request_error",
-    "param": null,
-    "code": "capability_not_supported"
-  }
-}
-```
-
-The Gateway MUST NOT silently translate an unsupported capability into another API operation.
-
----
+An `ExecutionRequest` whose operation or model mapping is unsupported is denied with code `capability_not_supported` (§16). The Gateway MUST NOT silently translate an unsupported capability into another operation.
 
 ## 4.4 Model Discovery
 
-`GET /v1/models` returns models available through the active deployment mode.
+`GetModels(operation, provider, tenant_id)` returns the models the active deployment can resolve for that operation.
 
-GPU-5 returns locally configured models.
-
-GPU-7 returns models exposed through configured external-provider mappings.
-
-A model MUST NOT be advertised through `/v1/models` unless it can actually be resolved by the active deployment.
-
----
+* GPU-5 returns locally configured models; GPU-7 returns models mapped to configured external providers.
+* A model MUST NOT be advertised unless it can actually be resolved and admitted by the active deployment.
+* Clients see only **logical** model IDs. `ModelInfo.provider_model_id` is deprecated and never populated: provider model IDs are never exposed downstream.
 
 ## 4.5 Model Object
 
-The canonical OpenAI-compatible model object is:
+`synanton.gpu.v1.ModelInfo` is the canonical model object: `model_id` (logical), `display_name`, `provider` (provider name), `operation`, `is_default`, `max_input_tokens`, `max_output_tokens`, `embedding_dim`.
 
-```json
-{
-  "id": "model-id",
-  "object": "model",
-  "created": 1686935002,
-  "owned_by": "organization-owner"
-}
-```
+## 4.6 Responses API — Deferred
 
-`shutdown_date` is a **Synanton extension**, not an OpenAI core field.
+The OpenAI Responses API is **not part of this contract** in revision 3.0.0 (GPU-5 or GPU-7). It is deferred to a future contract revision, which must add it to the protobuf contract before any implementation. No RPC, provider route, or configuration key for it exists, and none may be enabled.
 
-It MAY be emitted when configured.
+## 4.7 Contract Versioning
 
-For an active model without an explicit retirement date it MAY be `null`.
-
-The extension MUST NOT be represented as part of the canonical OpenAI-compatible model object definition.
-
----
-
-## 4.6 Responses API
-
-The Responses API is a GPU-7 capability.
-
-Supported operations:
-
-```text
-POST   /v1/responses
-GET    /v1/responses/{id}
-DELETE /v1/responses/{id}
-```
-
-The provider adapter MUST preserve Responses API semantics.
-
-A provider that does not support Responses API MUST NOT be silently converted to Chat Completions.
-
-GPU-5 does not require Responses API support in the current baseline.
-
-If GPU-5 Responses support is explicitly enabled through deployment configuration, the implementation and acceptance suite MUST support the capability. Startup and CI validation MUST prevent an invalid configuration in which the capability is enabled but not implemented.
-
----
-
-## 4.7 API Compatibility Versioning
-
-API compatibility is versioned independently from implementation versions.
-
-The `/v1` path identifies the external API compatibility generation.
-
-Breaking changes to the public API require a deliberate contract revision and OpenAPI validation.
-
-Implementation upgrades MUST NOT silently change externally observable API semantics.
+The protobuf package `synanton.gpu.v1` identifies the compatibility generation. Changes within `v1` are additive only (new fields, new RPCs, deprecation — never removal or renumbering). Breaking changes require `synanton.gpu.v2`.
 
 ---
 
@@ -422,7 +315,6 @@ Deployment startup MUST fail closed when required configuration is inconsistent.
 Examples include:
 
 * unsupported deployment mode;
-* missing required API-key pepper;
 * missing provider credentials for enabled external mappings;
 * enabled capability without implementation;
 * invalid model mapping;
@@ -509,6 +401,7 @@ The following pinned operational values are defined in their respective canonica
 | ------------------------- | --------- | ------------------------------- |
 | Envoy listener            | `8080`    | §2.2 / deployment configuration |
 | Envoy → vLLM              | `8000`    | §2.2 / deployment configuration |
+| Gateway gRPC API          | `9090`    | §4.2                            |
 | Gateway health/metrics    | `8091`    | deployment configuration        |
 | Envoy → vLLM timeout      | `300 s`   | §31                             |
 | JWKS cache TTL            | `5 min`   | §12                             |
@@ -556,91 +449,36 @@ Floating tags MUST NOT be used.
 
 ---
 
-# 10. Streaming SSE Contract
+# 10. Streaming Contract (`ExecuteStream`)
 
-## 10.1 Chat Completions
+## 10.1 Stream Framing
 
-For Chat Completions streaming:
+`ExecuteStream` returns a server stream of `ExecutionChunk` messages:
 
-* every data event MUST contain JSON conforming to the `chat.completion.chunk` schema;
-* SSE framing MUST be valid;
-* `[DONE]` MUST be emitted exactly once after the final completion chunk;
-* no arbitrary non-contract JSON events may be inserted into the stream.
+* zero or more `data` messages — each carries **one** OpenAI-compatible `chat.completion.chunk` JSON object, in the order the runtime streamed it;
+* then **exactly one** `terminal` message (`ExecutionResponse`: final state, usage, error, `upstream_request_id`), always last.
 
-When:
+The terminal message replaces the SSE `data: [DONE]` marker: the runtime's `[DONE]` is consumed by the Gateway and MUST NOT appear in `data`. Duplicate provider `[DONE]` markers are suppressed; a provider stream that ends without `[DONE]` terminates with `upstream_provider_error`.
 
-```text
-stream_options.include_usage = true
-```
+Every `data` chunk carries the **logical** model ID; the provider model ID never appears downstream. SSE comment/keep-alive lines are not forwarded. No non-contract JSON is inserted.
 
-is requested and authoritative usage is available, the Gateway **MUST** emit terminal usage according to the external contract.
+Only SYNTHESIZE may stream; other operations on `ExecuteStream` are denied with `capability_not_supported`. A runtime without streaming support fails the same way — never by silently switching to unary.
 
-When authoritative usage is unavailable, §10.2 applies.
-
----
+An idempotent replay of a completed request returns only the terminal message (streamed content is not retained).
 
 ## 10.2 Usage
 
-Provider-reported usage is authoritative.
+Provider/runtime-reported usage is authoritative. When the request payload sets `stream_options.include_usage = true`, the usage-bearing chunk is forwarded as a `data` message and the same usage appears in the terminal `usage`.
 
-If authoritative usage is unavailable and no supported pre-flight estimate exists, the terminal usage value MUST be:
-
-```json
-"usage": null
-```
-
-A zero-valued usage object MUST NOT be substituted for unavailable authoritative usage.
-
-The terminal usage block MUST still be represented according to the external streaming contract when usage was requested.
-
----
+When authoritative usage is unavailable, the terminal `usage` field is **unset** (the protobuf equivalent of `usage: null`). A zero-valued usage MUST NOT be substituted.
 
 ## 10.3 GPU-7 Usage
 
-The GPU-7 adapter MAY inject:
+The GPU-7 adapter always requests `stream_options.include_usage = true` upstream so that authoritative usage reaches the cost ledger (§36). The usage-bearing chunk is forwarded downstream only when the client asked for it.
 
-```text
-stream_options.include_usage=true
-```
+## 10.4 Responses API Streaming
 
-upstream when required to obtain authoritative usage from the provider.
-
-Provider request and response semantics MUST remain compatible with the Gateway's external API contract.
-
-Provider usage MUST be propagated into the cost ledger.
-
----
-
-## 10.4 Responses API SSE Wire Format
-
-Responses API streaming uses explicit SSE event types.
-
-The wire format is:
-
-```text
-event: response.created
-data: {"type":"response.created", ...}
-
-event: response.in_progress
-data: {"type":"response.in_progress", ...}
-
-event: response.completed
-data: {"type":"response.completed", ...}
-```
-
-The `event:` field identifies the SSE event type.
-
-The JSON `data` payload contains the corresponding Responses API event object and MUST include the matching `type`.
-
-Responses API streaming MUST NOT use:
-
-```text
-data: [DONE]
-```
-
-as the terminal protocol.
-
-The adapter MUST preserve provider-supported Responses API lifecycle semantics.
+Deferred with the Responses API (§4.6).
 
 ---
 
@@ -649,20 +487,16 @@ The adapter MUST preserve provider-supported Responses API lifecycle semantics.
 The Gateway processing sequence is:
 
 ```text
-1. Receive request
-2. Validate request ID
-3. Authenticate API key
-4. Resolve organization/project identity
-5. Validate request schema
-6. Resolve logical model
-7. Resolve deployment mode
-8. Apply sensitivity policy
-9. Apply rate limits/quota
-10. Apply budget controls
-11. Resolve execution/provider target
-12. Execute request
-13. Record usage/cost state
-14. Return response
+1. Receive gRPC request (Execute / ExecuteStream)
+2. Authenticate caller (mTLS principal — §13; not yet implemented)
+3. Validate fields (§21)
+4. Idempotency lookup on request_id (§18)
+5. Resolve routing decision: deployment mode, logical model, provider (ProviderRouter)
+6. Apply provider health, sensitivity policy and budget controls (GPU-7, §29)
+7. Admit: model concurrency (§20a)
+8. Rewrite logical → provider model ID and execute
+9. Record usage and cost ledger entry (GPU-7)
+10. Return response / stream
 ```
 
 GPU-5 additionally performs:
@@ -699,10 +533,10 @@ The JWT contains a request-body hash.
 The hash is:
 
 ```text
-SHA-256(raw HTTP request body bytes)
+SHA-256(raw request body bytes forwarded to Envoy)
 ```
 
-The hash MUST be computed from the raw request body as received by the Gateway before JSON parsing.
+The hash MUST be computed over the exact body bytes the Gateway forwards (the `ExecutionRequest.payload` after model-ID rewriting), before any JSON re-serialization by a downstream hop.
 
 The Gateway MUST NOT use canonicalized JSON for the current hash definition.
 
@@ -742,108 +576,21 @@ They do not apply to GPU-7.
 
 ---
 
-# 13. API-Key Authentication
+# 13. Caller Authentication and Tenant Identity
 
-## 13.1 Authorization Schemes
+## 13.1 Caller
 
-The Gateway MUST support:
+The only client of the GPU Plane is the Synanton Platform, as a service principal.
 
-```text
-Authorization: Bearer <key>
-Authorization: Api-Key <key>
-```
+The contract-level authentication mechanism is **mTLS** on the gRPC channel (T-K8S-7 transport security, T-K8S-8 principal validation). `ErrorReason.UNAUTHORIZED` is reserved for mTLS failures.
 
----
+**Implementation state (revision 3.0.0):** the current build serves **plaintext gRPC** and does not validate a principal. Until T-K8S-7/8 land, the gRPC port MUST be reachable only from the platform's network — Kubernetes NetworkPolicy (GPU-5, §19) or the private compose network (GPU-7) — and MUST NOT be published to untrusted networks.
 
-## 13.2 API-Key Formats
+## 13.2 Tenant Identity
 
-The OpenAI-compatible key format MUST be supported:
+`ExecutionRequest.tenant_id` is a tenant **assertion**, not a credential. With mTLS in place, the Gateway validates it against the authenticated principal's permitted tenant scope (`TENANT_NOT_ALLOWED` on mismatch). Budget and quota controls key on `tenant_id`.
 
-```text
-sk-syn-...
-```
-
-Native Synanton clients MAY/SHOULD use:
-
-```text
-syn_live_<key_id>_<secret>
-```
-
-Supporting both prefixes MUST NOT create different authentication, identity, quota, or authorization semantics.
-
-API-key pepper MUST be provisioned separately.
-
-The pepper MUST:
-
-* never be committed to source control;
-* never be logged;
-* never be exposed through API responses.
-
----
-
-## 13.3 Organization and Project Headers
-
-The Gateway MUST accept the OpenAI-compatible identity headers:
-
-```text
-OpenAI-Organization: <organization-id>
-OpenAI-Project: <project-id>
-```
-
-The headers participate in resolving the request's Gateway identity.
-
-The resolved identity MUST be checked against the authenticated API key.
-
-### Project Resolution
-
-When `OpenAI-Project` is supplied:
-
-1. the Gateway resolves the supplied project identifier;
-2. the authenticated API key is checked for authorization to that project;
-3. if the key does not match the requested project, the request is rejected.
-
-The rejection MUST be:
-
-```text
-HTTP 401
-```
-
-with:
-
-```json
-{
-  "error": {
-    "message": "The API key does not match the requested project.",
-    "type": "authentication_error",
-    "param": "OpenAI-Project",
-    "code": "project_mismatch"
-  }
-}
-```
-
-If no `OpenAI-Project` header is supplied, the Gateway uses the project identity associated with the authenticated API key according to deployment configuration.
-
-`OpenAI-Organization` participates in organization resolution and MUST NOT override the organization associated with the authenticated key.
-
-If supplied organization identity is inconsistent with the authenticated identity, the Gateway MUST reject the request rather than silently changing tenant identity.
-
-The previous public custom header:
-
-```text
-X-Project-ID
-```
-
-is removed from the API contract.
-
-Clients MUST use:
-
-```text
-OpenAI-Project
-```
-
-instead.
-
-Internal Gateway metadata MAY propagate tenant/project identity between internal components, but such metadata is not part of the public API contract.
+API keys (`sk-syn-...`, `syn_live_...`), `OpenAI-Organization` / `OpenAI-Project` headers and API-key peppers are **not part of the contract** (§4.1); end-user and project identity is resolved by the Platform (Identity 1.29) before it calls the GPU Plane.
 
 ---
 
@@ -861,126 +608,61 @@ At least one local rerank-capable model MUST be available in the GPU-5 reference
 
 ---
 
-# 15. OpenAPI Validation
+# 15. Contract Validation
 
-The canonical OpenAPI artifact is:
+The canonical artifact is the protobuf contract (§4.1).
 
-```text
-gpu-contract/openapi/openapi.yaml
-```
+CI MUST enforce:
 
-The contract MUST be validated in CI.
+* byte-identical `gpu_execution_service.proto` in `gpu-runtime` and `platform` (`scripts/verify-gpu-contract-mirror.sh`, wired into `./gradlew check`; T-K8S-15a);
+* successful code generation and compilation of both repositories against it;
+* additive-only evolution within `synanton.gpu.v1` (§4.7).
 
-Validation includes:
-
-* syntax;
-* schema correctness;
-* endpoint compatibility;
-* request/response examples;
-* error schemas;
-* breaking changes;
-* canonical/package equality.
-
-T-K8S-15b owns OpenAPI contract validation.
+T-K8S-15b (formerly OpenAPI validation) is retired: there is no OpenAPI artifact.
 
 ---
 
 # 16. Error Contract
 
-## 16.1 Canonical Error Envelope
+## 16.1 Error Surfaces
 
-All client-visible errors MUST use the canonical envelope:
+Errors reach the client on exactly one of two surfaces:
 
-```json
-{
-  "error": {
-    "message": "string",
-    "type": "string",
-    "param": "string or null",
-    "code": "string or null"
-  }
-}
-```
+1. **Pre-execution denial** — the request is never admitted or dispatched. The RPC fails with a gRPC status; the canonical code is in the trailer `x-synanton-error-code` and prefixed to the status description (`<code>: <message>`).
+2. **Execution failure** — the request was admitted. The RPC succeeds with `state = FAILED` and `error = ErrorInfo{reason, code, message, retryable}` (for `ExecuteStream`, in the terminal message).
 
-The complete status/type/code mapping below is authoritative.
+`ErrorInfo.code` is the authoritative fine-grained code; `ErrorInfo.reason` is the coarse `ErrorReason` category. `message` is diagnostic only, never contains provider response bodies, prompts, or credentials, and is not for user-facing rendering.
 
-Implementations MUST NOT invent alternate client-visible error structures for conditions covered by this table.
+## 16.2 Canonical Code Mapping
 
-## 16.2 Canonical Status/Type/Code Mapping
+| Condition | Surface | gRPC status / `reason` | `code` |
+| --- | --- | --- | --- |
+| Field validation failure (incl. request ID) | denial | `INVALID_ARGUMENT` | `invalid_request` |
+| Same `request_id`, different request | denial | `INVALID_ARGUMENT` | `idempotency_conflict` |
+| Model not in catalog/registry | denial | `NOT_FOUND` | `model_not_found` |
+| Model lacks the operation / non-streamable operation | denial | `FAILED_PRECONDITION` | `capability_not_supported` |
+| Catalog provider not configured | denial | `FAILED_PRECONDITION` | `provider_not_configured` |
+| Provider disabled or unhealthy | denial | `UNAVAILABLE` | `provider_unavailable` |
+| External routing kill switch off | denial | `PERMISSION_DENIED` | `routing_disabled` |
+| LOCAL request in external-only mode | denial | `PERMISSION_DENIED` | `no_local_fallback` |
+| Sensitive model/request routed externally | denial | `PERMISSION_DENIED` | `sensitive_model_external_blocked` |
+| Tenant daily budget exhausted | denial | `RESOURCE_EXHAUSTED` | `budget_exceeded` |
+| Budget/ledger state unavailable | denial | `UNAVAILABLE` | `budget_state_unavailable` |
+| Model concurrency limit | denial | `RESOURCE_EXHAUSTED` | `concurrency_limit_reached` |
+| Capacity / quota exceeded | denial | `RESOURCE_EXHAUSTED` | `capacity_exceeded` |
+| Provider 5xx / malformed response / broken stream | failure | `EXECUTION_FAILED` | `upstream_provider_error` |
+| Provider timeout | failure | `EXECUTION_TIMEOUT` | `upstream_provider_timeout` |
+| Provider connection failure | failure | `GPU_UNAVAILABLE` | `provider_unavailable` |
+| Provider circuit open (no provider call made) | failure | `GPU_UNAVAILABLE` | `circuit_open` |
+| Provider rate limit (429) | failure | `GPU_UNAVAILABLE` | `provider_rate_limited` |
+| Provider rejected credentials (401/403) | failure | `EXECUTION_FAILED` | `provider_auth_failed` |
+| Provider capability gap (e.g. rerank unsupported) | failure | `INVALID_REQUEST` | `capability_not_supported` |
+| Local model load failure | failure | `MODEL_LOAD_TIMEOUT` | `model_load_failed` |
+| Local runtime unavailable / failed | failure | `GPU_UNAVAILABLE` / `EXECUTION_FAILED` | `runtime_unavailable` / `runtime_failed` |
+| Cancelled | failure | `EXECUTION_CANCELLED` | `execution_cancelled` |
+| Unexpected Gateway failure | denial | `INTERNAL` | `internal_error` |
 
-| Condition                          | HTTP | `type`                  | `code`                             |
-| ---------------------------------- | ---: | ----------------------- | ---------------------------------- |
-| Invalid API key                    |  401 | `authentication_error`  | `invalid_api_key`                  |
-| Project mismatch                   |  401 | `authentication_error`  | `project_mismatch`                 |
-| Invalid request ID                 |  400 | `invalid_request_error` | `invalid_request_id`               |
-| Invalid JSON                       |  400 | `invalid_request_error` | `invalid_json`                     |
-| Schema validation failure          |  400 | `invalid_request_error` | `schema_validation_failed`         |
-| Unsupported content type           |  400 | `invalid_request_error` | `unsupported_content_type`         |
-| Payload too large                  |  413 | `invalid_request_error` | `payload_too_large`                |
-| Model not found                    |  404 | `invalid_request_error` | `model_not_found`                  |
-| Capability unsupported             |  400 | `invalid_request_error` | `capability_not_supported`         |
-| Idempotency conflict               |  409 | `invalid_request_error` | `idempotency_conflict`             |
-| Sensitive external routing blocked |  403 | `permission_error`      | `sensitive_model_external_blocked` |
-| Request rate limit                 |  429 | `requests`              | `rate_limit_exceeded`              |
-| Token rate limit                   |  429 | `tokens`                | `rate_limit_exceeded`              |
-| Daily request limit                |  429 | `requests`              | `rate_limit_exceeded`              |
-| Daily token limit                  |  429 | `tokens`                | `rate_limit_exceeded`              |
-| Budget exhausted                   |  429 | `insufficient_quota`    | `budget_exceeded`                  |
-| Concurrency limit                  |  429 | `concurrency`           | `concurrency_limit_reached`        |
-| Provider failure                   |  502 | `api_error`             | `upstream_provider_error`          |
-| Provider timeout                   |  504 | `api_error`             | `upstream_provider_timeout`        |
-| Internal Gateway failure           |  500 | `server_error`          | `internal_error`                   |
-
-### Rate-Limit Error Semantics
-
-429 responses MUST distinguish the exhausted control dimension.
-
-Request-based limits use:
-
-```text
-type: requests
-code: rate_limit_exceeded
-```
-
-Token-based limits use:
-
-```text
-type: tokens
-code: rate_limit_exceeded
-```
-
-Budget exhaustion uses:
-
-```text
-type: insufficient_quota
-code: budget_exceeded
-```
-
-Concurrency exhaustion uses:
-
-```text
-type: concurrency
-code: concurrency_limit_reached
-```
-
-Where a reliable retry interval is available, the Gateway SHOULD provide:
-
-```text
-retry-after-ms
-Retry-After
-```
-
-The Gateway MUST NOT synthesize an inaccurate retry interval.
-
-### Request ID and Error Body
-
-Every response includes:
-
-```text
-x-request-id
-```
-
-The request ID MUST NOT be duplicated into the canonical error body as a custom extension.
+Implementations MUST NOT invent alternate codes for conditions covered by this table.
 
 ---
 
@@ -1006,16 +688,15 @@ These tickets do not apply to GPU-7.
 
 Async and retryable operations MUST support idempotency.
 
-The idempotency key is caller-generated and identifies a logical submission/request.
+The idempotency key is `ExecutionRequest.request_id`; it is caller-generated and identifies a logical submission/request.
 
 The same key with the same request MUST return the same logical operation/result.
 
 The same key with a different request MUST return:
 
 ```text
-HTTP 409
-type: invalid_request_error
-code: idempotency_conflict
+gRPC INVALID_ARGUMENT
+x-synanton-error-code: idempotency_conflict
 ```
 
 The Gateway MUST NOT silently reuse an idempotency key for a different request.
@@ -1037,7 +718,7 @@ GPU-6 defines the production shared-idempotency requirements.
 GPU-5 network boundaries MUST enforce:
 
 ```text
-Client → Gateway
+Platform → Gateway (gRPC)
 Gateway → Envoy
 Envoy → vLLM
 Gateway → PostgreSQL
@@ -1097,157 +778,29 @@ T-K8S-35 validates:
 
 ---
 
-# 20a. Rate Limits and Quota Signaling
+# 20a. Quota and Admission Signaling
 
-This section is the canonical rate-limit definition.
+**Implemented:** per-model admission concurrency (`gpu-gateway.models.<id>.concurrency-limit`; catalog models default to 8) → `RESOURCE_EXHAUSTED` / `concurrency_limit_reached`; GPU-7 per-tenant daily budget (§33) → `RESOURCE_EXHAUSTED` / `budget_exceeded`.
 
-Authenticated responses for:
+**Not implemented:** request/token rate limits (RPM, TPM, RPD, TPD). They are not enforced and therefore MUST NOT be advertised by the Gateway. There are no rate-limit headers (the transport is gRPC).
 
-```text
-chat
-embeddings
-rerank
-models
-models/{model}
-responses
-```
-
-when applicable, MUST emit:
-
-```text
-x-ratelimit-limit-requests
-x-ratelimit-limit-tokens
-x-ratelimit-remaining-requests
-x-ratelimit-remaining-tokens
-x-ratelimit-reset-requests
-x-ratelimit-reset-tokens
-```
-
-A shared tenant/project bucket is the default.
-
-API keys do not receive independent buckets unless policy explicitly configures an independent rate-limit domain.
-
-Supported policy dimensions MAY include:
-
-* RPM;
-* TPM;
-* RPD;
-* TPD;
-* concurrency.
-
-Reference windows:
-
-```text
-RPM / TPM: 60 seconds
-RPD / TPD: 24 hours
-```
-
-These are policy defaults and are not §8 deployment constants.
-
-### Unlimited Dimensions
-
-When a rate-limit dimension is not enforced for the resolved tenant/project, its corresponding limit header MUST still be emitted.
-
-For an unlimited or unconfigured dimension:
-
-```text
-0 = unlimited
-```
-
-A deployment MAY configure a finite limit, but the advertised finite limit MUST actually be enforced.
-
-The Gateway MUST NOT advertise a finite limit that it does not enforce.
-
-### Metrics
-
-Required metrics:
-
-```text
-gpu_gateway_rate_limit_total{dimension,model,status}
-
-gpu_gateway_rate_limit_remaining_requests
-
-gpu_gateway_rate_limit_remaining_tokens
-
-gpu_gateway_429_total{dimension,model}
-```
-
-A tenant label MAY be added only after cardinality has been validated.
-
-### 429 Semantics
-
-429 behavior is defined by §16.
-
-Request limits:
-
-```text
-type = requests
-code = rate_limit_exceeded
-```
-
-Token limits:
-
-```text
-type = tokens
-code = rate_limit_exceeded
-```
-
-Daily request and token limits use the corresponding `requests` or `tokens` type with:
-
-```text
-code = rate_limit_exceeded
-```
-
-Budget exhaustion:
-
-```text
-type = insufficient_quota
-code = budget_exceeded
-```
-
-Concurrency:
-
-```text
-type = concurrency
-code = concurrency_limit_reached
-```
+`GetCapacity` is advisory only and never reserves capacity.
 
 ---
 
 # 21. Request IDs
 
-Every response MUST contain:
+`ExecutionRequest.request_id` is required and is the Platform's originating request identity **and** the idempotency key (§18).
 
-```text
-x-request-id
-```
+Validation at the Gateway boundary (`invalid_request` on failure):
 
-If the client supplies a valid `x-request-id`, the Gateway MUST preserve it.
+* `request_id`, `tenant_id`, `model`: 1–255 characters;
+* `model_version`: 1–128 characters;
+* `payload`: at most 4 MB (gRPC max inbound message size).
 
-Valid request IDs are:
+Every `ExecutionResponse`, `ExecutionStatus` and `ExecutionChunk` echoes `request_id`. `execution_id` is Gateway-generated.
 
-* 1–128 characters;
-* ASCII printable;
-* no whitespace;
-* no control characters;
-* no Unicode normalization ambiguity.
-
-Invalid values MUST be rejected at the Gateway boundary:
-
-```json
-{
-  "error": {
-    "message": "The supplied x-request-id is invalid.",
-    "type": "invalid_request_error",
-    "param": "x-request-id",
-    "code": "invalid_request_id"
-  }
-}
-```
-
-Missing request IDs MUST be generated as UUIDv4.
-
-The request ID MUST NOT be added to the error body as a custom extension.
+GPU-7: the Gateway sends `request_id` to the provider as `x-request-id`, and records the provider's returned request ID as `upstream_request_id` (§35).
 
 ---
 
@@ -1260,7 +813,7 @@ The complete GPU-5 implementation sequence is:
 | T-K8S-0   | Cluster                                    |
 | T-K8S-0b  | Namespace / registry                       |
 | T-K8S-1   | Gateway containerization                   |
-| T-K8S-1a  | OpenAPI artifact and packaging             |
+| T-K8S-1a  | Contract (proto) packaging                 |
 | T-K8S-2   | Build / push                               |
 | T-K8S-3   | PostgreSQL                                 |
 | T-K8S-4   | Model registry / routing / mode validation |
@@ -1268,10 +821,10 @@ The complete GPU-5 implementation sequence is:
 | T-K8S-6a  | JWT signing / JWKS                         |
 | T-K8S-6b  | Envoy `jwt_authn`                          |
 | T-K8S-6   | Envoy execution perimeter                  |
-| T-K8S-7   | TLS / API exposure                         |
-| T-K8S-8   | API-key authentication                     |
-| T-K8S-8a  | API-key issuance runbook                   |
-| T-K8S-8b  | API-key pepper provisioning                |
+| T-K8S-7   | gRPC transport security (mTLS) / exposure  |
+| T-K8S-8   | Caller principal validation (mTLS)         |
+| T-K8S-8a  | Retired (API keys removed, §4.1)           |
+| T-K8S-8b  | Retired (API-key pepper removed, §4.1)     |
 | T-K8S-9   | Health / Prometheus                        |
 | T-K8S-9a  | Tenant cardinality rule                    |
 | T-K8S-10  | Node-local model storage                   |
@@ -1280,7 +833,7 @@ The complete GPU-5 implementation sequence is:
 | T-K8S-13  | Idempotency                                |
 | T-K8S-14  | Acceptance suite                           |
 | T-K8S-15a | Protobuf contract mirror                   |
-| T-K8S-15b | OpenAPI contract validation                |
+| T-K8S-15b | Retired (no OpenAPI artifact, §15)         |
 
 Mode validation belongs to T-K8S-4.
 
@@ -1312,95 +865,43 @@ Independent API-key buckets are permitted only when explicitly configured.
 
 # 24. GPU-5 Acceptance
 
-T-K8S-14 owns the GPU-5 acceptance suite.
-
-Acceptance MUST be executable against the packaged deployment rather than only against unit-test or development classpaths.
+T-K8S-14 owns the GPU-5 acceptance suite. It MUST run against the packaged deployment over the gRPC transport (`tools/gpu-grpc-call.sh`, `deployments/homelab/scripts/smoke-test.sh`), not only against unit-test classpaths.
 
 ## 24.1 Positive Cases
 
-The suite MUST verify:
-
-1. API-key authentication succeeds with `Bearer`.
-2. API-key authentication succeeds with `Api-Key`.
-3. `sk-syn-...` keys are accepted.
-4. `/v1/models` returns the configured local models.
-5. `GET /v1/models/{model}` resolves a configured model.
-6. Chat Completions succeeds.
-7. Embeddings succeeds.
-8. Rerank succeeds against a configured rerank-capable model.
-9. Chat streaming produces valid `chat.completion.chunk` events.
-10. `[DONE]` is emitted exactly once.
-11. Usage is returned when authoritative usage is available.
-12. `x-request-id` is present on every response.
-13. A valid client-supplied `x-request-id` is preserved.
-14. `OpenAI-Project` resolves the authenticated project correctly.
-15. `OpenAI-Organization` is accepted.
-16. Idempotent repeated requests resolve to the same logical operation/result.
-17. Envoy accepts correctly signed Gateway execution JWTs.
-18. Valid requests reach vLLM.
+1. `GetModels` returns exactly the configured local models (logical IDs only).
+2. `Execute` SYNTHESIZE succeeds (Qwen3-4B on node3).
+3. `Execute` EMBED succeeds (BGE-base via TEI on node1).
+4. `Execute` RERANK succeeds against the configured rerank-capable model (node2).
+5. `ExecuteStream` yields `chat.completion.chunk` data messages followed by exactly one terminal message (§10).
+6. Usage is reported when authoritative usage is available; unset otherwise.
+7. `request_id` is echoed on every response.
+8. Repeated identical requests resolve to the same execution (§18).
+9. `GetStatus` is authoritative after an `Execute` deadline.
+10. Envoy accepts correctly signed Gateway execution JWTs and valid requests reach the backends.
 
 ## 24.2 Negative Cases
 
-The suite MUST verify:
+1. Unknown model → `NOT_FOUND` / `model_not_found`.
+2. Invalid/oversized fields → `INVALID_ARGUMENT` / `invalid_request`.
+3. Same `request_id`, different request → `idempotency_conflict`.
+4. Unsupported operation for a model → `capability_not_supported`.
+5. Direct access to vLLM/TEI is denied (NetworkPolicy).
+6. Invalid execution JWT is rejected by Envoy.
+7. Missing/invalid JWT verification material fails closed.
+8. Gateway gRPC is not reachable from outside the platform network (§13.1).
 
-1. Invalid API key → `invalid_api_key`.
-2. Project mismatch → `project_mismatch`.
-3. Invalid request ID → `invalid_request_id`.
-4. Invalid JSON → `invalid_json`.
-5. Schema failure → `schema_validation_failed`.
-6. Unsupported content type → `unsupported_content_type`.
-7. Oversized payload → `payload_too_large`.
-8. Unknown model → `model_not_found`.
-9. Unsupported API capability → `capability_not_supported`.
-10. Same idempotency key with a different request → `idempotency_conflict`.
-11. Direct vLLM access is denied.
-12. Invalid execution JWT is rejected by Envoy.
-13. Missing/invalid JWT verification material fails closed.
-14. Public `X-Project-ID` is not treated as the project identity header.
+## 24.3 Admission Cases
 
-## 24.3 Rate-Limit Cases
+1. Model concurrency exhaustion → `RESOURCE_EXHAUSTED` / `concurrency_limit_reached`.
+2. No rate-limit dimension that is not enforced is advertised (§20a).
 
-The suite MUST verify:
+## 24.4 Contract Cases
 
-1. request rate-limit exhaustion;
-2. token rate-limit exhaustion;
-3. daily request exhaustion;
-4. daily token exhaustion;
-5. concurrency exhaustion;
-6. budget exhaustion where budget enforcement is enabled;
-7. correct 429 status;
-8. correct `type`;
-9. correct `code`;
-10. rate-limit headers are emitted;
-11. unlimited dimensions use `0`;
-12. finite advertised limits are actually enforced;
-13. retry headers are emitted only when a reliable retry interval is available.
-
-## 24.4 Identity Cases
-
-The suite MUST verify:
-
-1. authenticated API key resolves to the expected project;
-2. `OpenAI-Project` matching the key succeeds;
-3. `OpenAI-Project` mismatching the key fails with HTTP 401;
-4. `OpenAI-Organization` is accepted;
-5. inconsistent organization identity is rejected according to configured identity policy;
-6. public `X-Project-ID` does not override authenticated identity.
-
-## 24.5 Contract Cases
-
-The suite MUST verify:
-
-1. all supported endpoints match the canonical OpenAPI contract;
-2. error responses use the canonical envelope;
-3. all normative error codes in §16 are exercised;
-4. Chat Completions SSE conforms to the OpenAPI-defined chunk schema;
-5. `[DONE]` is emitted exactly once;
-6. usage semantics match §10;
-7. request IDs match §21;
-8. rate-limit headers match §20a;
-9. unsupported capabilities return `capability_not_supported`;
-10. packaged OpenAPI equals the canonical artifact.
+1. The packaged Gateway's proto equals the canonical artifact (§15).
+2. Every denial carries `x-synanton-error-code`; every failure carries `ErrorInfo.code` (§16).
+3. Stream framing matches §10.1 (exactly one terminal, no `[DONE]` in data).
+4. Usage semantics match §10.2; request IDs match §21.
 
 ---
 
@@ -1654,14 +1155,14 @@ The external provider adapter MUST support, where the provider supports the corr
 
 * Chat Completions;
 * Embeddings;
-* Responses API;
+* Rerank (where the provider supports it);
 * streaming;
 * usage;
 * error mapping;
 * `include_usage`;
 * provider request-ID preservation.
 
-The adapter MUST normalize provider behavior into the canonical Synanton external API contract.
+The adapter MUST normalize provider behavior into the `synanton.gpu.v1` contract: logical model IDs downstream, canonical error codes (§16), usage, and `upstream_request_id`.
 
 Provider-specific errors MUST be mapped according to §16.
 
@@ -1709,31 +1210,23 @@ Idempotency retention is:
 
 # 37. GPU-7 Acceptance
 
-T-K8S-51 owns GPU-7 external routing acceptance.
-
-The acceptance environment MUST include a mock provider.
+T-K8S-51 owns GPU-7 external routing acceptance. The acceptance environment MUST include the mock provider. Executable forms: `ExternalAcceptanceTest` (in-process gRPC server → `ExecuteService` → `ProviderRouter` → fake provider, PostgreSQL via Testcontainers) and `deployments/external/scripts/smoke-test.sh` (packaged compose stack).
 
 The suite MUST verify:
 
-* `/v1/models` returns external models;
-* Chat Completions routes to provider;
-* Embeddings routes to provider;
-* Rerank routes when configured;
-* Responses API routes when supported;
-* streaming is preserved;
-* provider usage is captured;
-* provider request IDs are preserved;
-* cost ledger records usage;
-* budget enforcement works;
-* sensitivity policy blocks prohibited routing;
-* kill switch fails closed;
-* circuit breaker behavior works;
-* provider errors map through §16;
-* provider timeouts map through §16;
-* no local fallback occurs;
-* no Envoy is required;
-* no vLLM is required;
-* no execution JWT is required.
+* `GetModels` returns external models by logical ID and never exposes provider model IDs;
+* SYNTHESIZE / EMBED route to the provider; RERANK routes when configured;
+* logical → provider model-ID rewrite upstream; logical ID restored on every downstream body, including every stream chunk;
+* `ExecuteStream` preserves chunk order, exactly one terminal, `include_usage` → usage chunk + terminal usage;
+* provider usage captured; `upstream_request_id` preserved;
+* cost ledger records usage; budget exhaustion → `budget_exceeded`;
+* sensitive model/request → `sensitive_model_external_blocked`;
+* kill switch off → `routing_disabled`;
+* circuit breaker opens and denies without a provider call;
+* provider 5xx → `upstream_provider_error`; provider timeout → `upstream_provider_timeout`;
+* provider lacking rerank → `capability_not_supported`;
+* LOCAL request, unavailable provider, or unknown provider → denied — **no local fallback**;
+* no Envoy, no vLLM, no execution JWT required.
 
 ---
 
@@ -1850,8 +1343,9 @@ T-K8S-53 is expected to be the final GPU-7 ticket.
 ## GPU-5
 
 ```text
-Public
+Synanton Platform
   |
+  | gRPC (mTLS — §13)
   v
 Gateway
   |
@@ -1869,15 +1363,16 @@ GPU
 The security boundary prevents:
 
 ```text
-Client → vLLM
-Client → Envoy execution endpoint
+Platform/other → vLLM
+Platform/other → Envoy execution endpoint
 ```
 
 ## GPU-7
 
 ```text
-Public
+Synanton Platform
   |
+  | gRPC (mTLS — §13)
   v
 Gateway
   |
@@ -1903,13 +1398,13 @@ There is no trusted internal execution JWT boundary.
 9. One GPU is assigned per inference workload.
 10. MIG and time slicing are not used.
 11. PostgreSQL is required for persistent Gateway state.
-12. API compatibility is OpenAI-oriented but limited to explicitly supported surfaces.
+12. The platform transport is gRPC `synanton.gpu.v1`; OpenAI-compatible JSON exists only inside payload/result bytes.
 13. Unsupported capabilities return deterministic errors.
 14. Error semantics are canonicalized in §16.
-15. Rate-limit semantics are canonicalized in §20a.
+15. Quota/admission semantics are canonicalized in §20a.
 16. Request IDs are canonicalized in §21.
-17. Organization/project identity uses OpenAI-compatible headers.
-18. Public `X-Project-ID` is removed.
+17. Caller identity is the Platform service principal (mTLS); tenant_id is an assertion (§13).
+18. API keys and OpenAI identity headers are not part of the contract.
 19. Provider-reported usage is authoritative.
 20. Unavailable usage is represented as `null`, not zero.
 21. GPU-6 production hardening is deferred.
@@ -1932,8 +1427,8 @@ There is no trusted internal execution JWT boundary.
 10. Multi-provider routing is implemented only after the single-provider path is validated.
 11. Provider capability gaps are surfaced explicitly.
 12. Provider errors are normalized through §16.
-13. Responses API is preserved where provider support exists.
-14. The adapter MUST NOT silently convert unsupported Responses API requests to Chat Completions.
+13. The Responses API is deferred (§4.6).
+14. Provider model IDs are never exposed downstream.
 
 ---
 
@@ -2048,11 +1543,10 @@ The resulting package MUST demonstrate:
 * no GPU nodes;
 * no Envoy;
 * no vLLM;
-* external-only `/v1/models`;
-* Chat Completions routed to provider;
-* Embeddings routed to provider;
-* Rerank routed when configured;
-* Responses API routed when supported;
+* external-only `GetModels`;
+* SYNTHESIZE (unary and streaming) routed to provider;
+* EMBED routed to provider;
+* RERANK routed when configured;
 * no execution JWT;
 * kill switch fail closed;
 * budget enforcement fail closed;
@@ -2064,7 +1558,16 @@ The package MAY target Kubernetes or a single-node container deployment.
 
 ---
 
-# 47. Change Summary — v2.1.9
+# 47. Change Summary — v3.0.0
+
+1. **Transport decision (PR #15):** the GPU Plane's API is gRPC `synanton.gpu.v1` (§4). The OpenAI-compatible REST API, API-key authentication, OpenAI identity headers, HTTP error envelopes and rate-limit headers are removed; the Responses API is deferred.
+2. **Contract additions (additive, mirrored in `platform`):** `ExecuteStream` RPC and `ExecutionChunk`; `upstream_request_id` on `ExecutionResponse`/`ExecutionStatus`; `ErrorInfo.code`; `ExecutionRequest.data_tags` (sensitivity); `ModelInfo.provider_model_id` deprecated and never populated.
+3. **§10** streaming, **§13** caller auth, **§15** contract validation, **§16** error codes, **§20a** quota, **§21** request IDs, **§24**/**§37** acceptance rewritten for gRPC.
+4. **Ticket changes:** T-K8S-7/8 reframed to mTLS; T-K8S-8a/8b/15b retired.
+
+---
+
+# 47a. Change Summary — v2.1.9 (superseded)
 
 The v2.1.9 change summary intentionally restarts numbering for this revision.
 
@@ -2104,11 +1607,11 @@ Before execution freeze:
 
 1. pin exact runtime versions;
 2. pin immutable image digests;
-3. validate canonical OpenAPI artifact;
-4. validate packaged OpenAPI equality;
+3. validate the protobuf contract mirror (§15);
+4. validate the packaged Gateway was built from that contract;
 5. execute GPU-5 acceptance suite;
 6. execute GPU-7 acceptance suite when GPU-7 implementation reaches T-K8S-51;
-7. perform a section-by-section diff against v2.1.6;
+7. perform a section-by-section diff against v2.1.9;
 8. confirm that no normative content was unintentionally removed;
 9. record reviewer/approver;
 10. record the freeze reference.
@@ -2119,10 +1622,10 @@ No implementation should treat an unpopulated freeze attestation as a frozen rel
 
 # 49. Freeze Attestation
 
-**Status:** Pre-implementation baseline
+**Status:** Implementation baseline (not frozen)
 
 ```text
-Specification version: 2.1.9
+Specification version: 3.0.0
 
 Frozen by:
 <reviewer/approver>
@@ -2134,7 +1637,7 @@ Freeze date:
 <date>
 
 Supersedes:
-2.1.8
+2.1.9
 
 Superseded by:
 none
@@ -2142,21 +1645,20 @@ none
 
 The specification MUST NOT be considered execution-frozen until the reviewer/approver and freeze reference are populated.
 
-The v2.1.9 release candidate SHOULD be subjected to a section-by-section comparison against v2.1.6 before those fields are populated.
+The v3.0.0 revision SHOULD be subjected to a section-by-section comparison against v2.1.9 before those fields are populated.
 
 ---
 
 # 50. Final Scope Statement
 
-Synanton GPU Plane v2.1.9 defines:
+Synanton GPU Plane v3.0.0 defines:
 
 * a local GPU execution profile for GPU-5;
 * a pure external-provider profile for GPU-7;
 * a deferred production-hardening profile for GPU-6;
-* an OpenAI-compatible external API for explicitly supported capabilities;
-* canonical error and rate-limit semantics;
-* OpenAI-compatible organization/project identity headers;
-* explicit streaming and usage contracts;
+* a gRPC platform transport (`synanton.gpu.v1`) shared byte-identically with the Platform;
+* canonical error and admission/quota semantics;
+* explicit streaming (`ExecuteStream`) and usage contracts;
 * GPU-5 execution JWT security;
 * GPU-7 external-provider controls;
 * PostgreSQL-backed persistent control state;
@@ -2167,4 +1669,4 @@ Synanton GPU Plane v2.1.9 defines:
 
 The specification is intended to serve as the implementation baseline without silently dropping normative content from prior revisions.
 
-**v2.1.9 is the candidate freeze revision pending the required v2.1.6 → v2.1.9 fidelity diff and freeze attestation.**
+**v3.0.0 is the implementation baseline pending the v2.1.9 → v3.0.0 fidelity diff and freeze attestation.**

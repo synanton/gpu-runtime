@@ -49,9 +49,9 @@ gpu-gateway:
   model-catalog:
     operations:
       SYNTHESIZE:
-        default-model: mock-chat-1
+        default-model: synanton-mock-chat
         models:
-          mock-chat-1:
+          synanton-mock-chat:   # logical ID ≠ provider ID: proves the rewrite end-to-end
             provider: MOCK
             provider-model-id: mock-chat-1
             display-name: "Mock Chat (acceptance)"
@@ -65,9 +65,9 @@ gpu-gateway:
             max-input-tokens: 128000
             max-output-tokens: 16384
       EMBED:
-        default-model: mock-embedding-1
+        default-model: synanton-mock-embedding
         models:
-          mock-embedding-1:
+          synanton-mock-embedding:   # logical ID ≠ provider ID: proves the rewrite end-to-end
             provider: MOCK
             provider-model-id: mock-embedding-1
             display-name: "Mock Embedding (acceptance)"
@@ -81,9 +81,9 @@ gpu-gateway:
             max-input-tokens: 8192
             embedding-dim: 1536
       RERANK:
-        default-model: mock-reranker-1
+        default-model: synanton-mock-reranker
         models:
-          mock-reranker-1:    # §40: advertised only because mock mapping supports it
+          synanton-mock-reranker:   # logical ≠ provider ID; §40: advertised because the mock supports rerank
             provider: MOCK
             provider-model-id: mock-reranker-1
             display-name: "Mock Reranker (acceptance)"

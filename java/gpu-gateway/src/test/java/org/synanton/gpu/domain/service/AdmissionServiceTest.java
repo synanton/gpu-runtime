@@ -95,6 +95,19 @@ class AdmissionServiceTest {
                 .isEqualTo(AdmissionRejection.INVALID_ARGUMENT);
     }
 
+    @Test
+    void shouldRejectOversizedRequestId() {
+        // Deployment Plan §21: request_id is 1–255 characters
+        ExecutionRequest request = buildRequest("model-a", 0).toBuilder()
+                .setRequestId("r".repeat(256))
+                .build();
+
+        assertThatThrownBy(() -> admissionService.validateFields(request))
+                .isInstanceOf(AdmissionException.class)
+                .extracting(e -> ((AdmissionException) e).getRejection())
+                .isEqualTo(AdmissionRejection.INVALID_ARGUMENT);
+    }
+
     private ExecutionRequest buildRequest(String modelId, int ignoredMaxTokens) {
         return ExecutionRequest.newBuilder()
                 .setRequestId("req-test-1")

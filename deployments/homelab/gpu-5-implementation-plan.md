@@ -30,10 +30,10 @@
 | node3 | 20C/64Gi, RTX 5060 Ti 16GB | vLLM synthesis | `/mnt/local-fast/models/qwen3-4b-instruct-2507` |
 
 ```text
-Client
-  | HTTPS (TLS via Traefik ingressclass, phase 8)
+Synanton Platform
+  | gRPC synanton.gpu.v1 (Deployment Plan v3.0.0 §4; mTLS = T-K8S-7/8, pending)
   v
-Gateway (node1, :8080, metrics :8091)
+Gateway (node1, gRPC :9090, metrics :8091)
   | ES256 execution JWT (spec §12)
   v
 Envoy (node1, :8080)  jwt_authn ← JWKS from Gateway /internal/.well-known/jwks.json
@@ -266,12 +266,12 @@ Each phase's exit criteria must pass before moving on.
 | 1 | T-K8S-1, T-K8S-2 | §5 above: mirror images; build+push gateway | All 6 images in `local-registry:5000` |
 | 2 | T-K8S-3 | `./scripts/deploy.sh postgres` | Pod Running on node1; `psql` connects via ClusterIP; V1/V2 Flyway migrations applied by first Gateway boot |
 | 3 | T-K8S-5, T-K8S-10 | `./scripts/deploy.sh inference` | All 3 inference pods Running (tei-embedding on node1, vllm-reranker on node2, vllm-synthesis on node3); smoke tests pass (§8.1–8.3) |
-| 4 | T-K8S-4, T-K8S-1a | `./scripts/deploy.sh gateway` — mode `local-only`, model registry → 3 inference services | Gateway ready; startup validation fails closed on bad config; `/v1/models` lists the 3 Synanton IDs |
+| 4 | T-K8S-4, T-K8S-1a | `./scripts/deploy.sh gateway` — mode `local-only`, model registry → 3 inference services | Gateway ready; startup validation fails closed on bad config; `GetModels` lists the 3 Synanton IDs |
 | 5 | T-K8S-6a, 6b, 6 | ES256 keypair → Secret; `./scripts/deploy.sh envoy` | Unsigned request → 401; Gateway-signed request reaches the backends; direct backend Service access still works only from Envoy (enforced in phase 7) |
-| 6 | T-K8S-8, 8a, 8b | API-key pepper Secret; issue first `sk-syn-...` key | `Bearer` + `Api-Key` auth accepted; wrong key → `invalid_api_key` envelope per §16 |
+| 6 | T-K8S-8 | Caller principal validation (mTLS) — **pending ticket**; API keys were removed from the contract (Plan v3.0.0 §13) | Until then the gRPC port is reachable only via NetworkPolicy (phase 7) |
 | 7 | T-K8S-11, 12 | `./scripts/deploy.sh policies` | Direct client→backend denied; logs contain no prompts/completions |
-| 8 | T-K8S-7, 9, 9a | TLS exposure (reuse cluster Traefik ingressclass, self-signed cert per speech pattern); Prometheus scrape of Gateway :8091 | `https://` API reachable; `gpu_gateway_*` metrics visible |
-| 9 | T-K8S-13, 14, 15a, 15b | Idempotency retention 24 h; run acceptance suite (§9); OpenAPI canonical/package equality | §24 suite green against the packaged deployment |
+| 8 | T-K8S-7, 9, 9a | gRPC transport security (mTLS — pending ticket); Prometheus scrape of Gateway :8091 | `gpu_gateway_*` metrics visible |
+| 9 | T-K8S-13, 14, 15a | Idempotency retention 24 h; run acceptance suite (§9); proto contract mirror (`scripts/verify-gpu-contract-mirror.sh`) | §24 suite green against the packaged deployment |
 
 Secrets are created imperatively and never committed (spec §12/§13):
 
@@ -280,9 +280,6 @@ Secrets are created imperatively and never committed (spec §12/§13):
 openssl ecparam -name prime256v1 -genkey -noout -out es256-current.pem
 kubectl -n gpu-plane create secret generic gpu-gateway-jwt-keys \
   --from-file=current=es256-current.pem
-
-# Phase 6 — API-key pepper
-kubectl -n gpu-plane create secret generic gpu-gateway-pepper --from-literal=pepper="$(openssl rand -hex 32)"
 
 # Phase 2 — PostgreSQL credentials
 kubectl -n gpu-plane create secret generic gpu-postgres-cred \
@@ -294,15 +291,13 @@ kubectl -n gpu-plane create secret generic gpu-postgres-cred \
 
 Two levels, complementary:
 
-**A. Manual end-to-end via the Gateway** — `tools/gpu-plane-check.py` at the repo
-root (stdlib-only Python CLI, works for GPU-5 and GPU-7; validates §10 streaming,
-§16 error envelopes, §21 request IDs):
+**A. End-to-end via the Gateway** — over the platform transport, gRPC
+`synanton.gpu.v1` on :9090 (Deployment Plan v3.0.0 §4; requires `grpcurl`):
 
 ```bash
-kubectl -n gpu-plane port-forward svc/gpu-gateway 8080:8080   # or Traefik URL in phase 8
-tools/gpu-plane-check.py --profile gpu5 --api-key "$GPU_DEV_API_KEY" all
-# phase 8 TLS: --base-url https://<node-ip>:30443 --insecure
-# §13.1: also run  ... negative --auth-scheme Api-Key
+kubectl -n gpu-plane port-forward svc/gpu-gateway 9090:9090
+tools/gpu-grpc-call.sh localhost:9090 GetModels '{"operation":"SYNTHESIZE"}'
+./scripts/smoke-test.sh gateway          # same call via port-forward
 ```
 
 **B. Per-service, pre-Gateway (phases 3/5)** — in-cluster curl pod (image already
@@ -340,11 +335,11 @@ and append to §11.
 
 Executable after phase 9 against the packaged deployment:
 
-- §24.1 cases 1–15 (auth schemes, model discovery, chat/embed/rerank, SSE `[DONE]`, usage, request IDs, project/org headers, idempotent replay, Envoy JWT acceptance).
-- §24.2 cases 1–14 (full negative matrix incl. direct-backend denial and fail-closed JWKS).
-- §24.3 rate-limit cases where policy configured; unlimited dimensions must emit `0`.
-- §24.5 cases 1–10 incl. packaged OpenAPI == canonical artifact (CI also enforces via `scripts/verify-gpu-contract-mirror.sh`).
-- §10 streaming: valid `chat.completion.chunk` framing, `[DONE]` exactly once, `usage: null` when authoritative usage unavailable.
+- §24.1 cases 1–10 over gRPC (model discovery, Execute chat/embed/rerank, ExecuteStream framing, usage, request IDs, idempotent replay, GetStatus, Envoy JWT acceptance).
+- §24.2 cases 1–8 (negative matrix incl. direct-backend denial and fail-closed JWKS).
+- §24.3 admission cases (concurrency; nothing unenforced is advertised).
+- §24.4 contract cases incl. proto mirror equality (`scripts/verify-gpu-contract-mirror.sh`, also in CI).
+- §10 streaming: `chat.completion.chunk` data messages, exactly one terminal message, usage unset when authoritative usage is unavailable.
 - D1 validation per §9: upgrade checklist (JWT, streaming, model load, GPU memory, graceful shutdown) run once against vLLM v0.29.0 and recorded here.
 
 **Per-workload hardware acceptance (PR #15 review §3):**
