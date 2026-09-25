@@ -18,13 +18,22 @@ The specification covers three deployment stages:
 
 | Stage | Purpose                                   |    Local GPU |    Envoy |     vLLM | Status                     |
 | ----- | ----------------------------------------- | -----------: | -------: | -------: | -------------------------- |
-| GPU-5 | Home/reference local inference deployment |     Required | Required | Required | Implementing               |
+| GPU-5 | Home/reference local inference deployment |     Required | Required | Required | Implementing — see §1a     |
 | GPU-6 | Production hardening                      |     Required | Required | Required | Design only — deferred     |
-| GPU-7 | Pure external-provider adapter deployment | Not required |       No |       No | Implementing independently |
+| GPU-7 | Pure external-provider adapter deployment | Not required |       No |       No | Implemented — see §1a      |
 
 GPU-5 and GPU-7 are intentionally separate deployment profiles.
 
 GPU-6 is a production-hardening stage and is **not a prerequisite or release gate for GPU-5 or GPU-7**.
+
+## 1a. Contract vs. Implementation vs. Acceptance (status 2026-09-25)
+
+This specification is the **contract**. What the code implements and what acceptance proves are tracked separately so the document never overstates the build:
+
+| Profile | Deployment contract | Implementation | Acceptance |
+| --- | --- | --- | --- |
+| GPU-5 | Defined (this spec; `deployments/homelab/`) | Manifests, Gateway routing config, gRPC transport, streaming (vLLM/TEI) done. **Missing:** execution-JWT signing + JWKS (T-K8S-6a) — Envoy therefore rejects Gateway→backend calls (fail closed); mTLS (T-K8S-7/8) | Phases 0–4 and per-service smoke executable; **§24 end-to-end blocked on T-K8S-6a**; no PoC run yet (plan §11) |
+| GPU-7 | Defined (this spec; `deployments/external/`) | Complete for §4/§10/§16/§21/§29–§40, incl. registry, mapping, streaming, health, circuit breaker, cost ledger, budget, sensitivity, kill switch. **Not implemented:** persisted runtime control state (T-K8S-38, §33), mTLS (T-K8S-7/8), multi-provider selection policy (T-K8S-52). Responses API deferred (§4.6) | **§37 executable and passing:** `ExternalAcceptanceTest` (17) + packaged `smoke-test.sh` (23, incl. live OpenRouter free-model arm) |
 
 ---
 
@@ -857,9 +866,7 @@ The Gateway policy model controls:
 
 Rate-limit dimensions are defined canonically in §20a.
 
-By default, quota/rate-limit policy is associated with the resolved tenant/project identity rather than individual API keys.
-
-Independent API-key buckets are permitted only when explicitly configured.
+Quota and budget policy is keyed on `ExecutionRequest.tenant_id` (§13.2); there are no API keys in the contract.
 
 ---
 

@@ -7,51 +7,38 @@
 
 ---
 
-## 0. Implementation state (honest ledger, PR #15 review P1.3/P2.3)
+## 0. Status — contract vs. implementation vs. acceptance (PR #15 P2.4)
 
-**Implemented and unit-tested** (`java/gpu-gateway`):
+| Layer | State (2026-09-25) |
+| --- | --- |
+| **Deployment contract** | **Defined** — Deployment Plan v3.0.0; transport = gRPC `synanton.gpu.v1` (§4) |
+| **Implementation** | **Complete for the v3.0.0 contract**, except the items listed as not implemented below |
+| **Acceptance (§37, T-K8S-51)** | **Executable and passing** — `ExternalAcceptanceTest` 17/17 (real gRPC, PostgreSQL, fake providers); `scripts/smoke-test.sh` 23/23 against the packaged compose stack, including the live OpenRouter free-model arm |
 
-- Provider registry: `gpu-gateway.providers.<id>` keyed by provider id (`openai`,
-  `mock`, future) — replaces the hard-coded OpenAi special case (review §5).
-- `ProviderRouter` — one authoritative routing model: catalog-driven
-  `RoutingDecision` (logical model → provider id, provider model ID, endpoint);
-  fail-closed startup on unknown `dispatch.strategy` (§5.5); external mode denies
-  `LOCAL` requests (**no local fallback**), kill switch
-  (`routing.external-enabled: false`) denies everything; unknown model →
-  `model_not_found`, known model lacking the operation → `capability_not_supported`,
-  disabled/absent provider → denied.
-- `OpenAiProviderRuntime` — generic OpenAI-compatible dispatch (chat/embeddings/
-  rerank) for every configured provider, incl. the **mock provider** (P0.3).
-- Logical → provider model-ID rewriting on the outbound payload, logical ID
-  restored on every downstream body **including every SSE chunk** (P1.1).
-- Streaming execution in the runtime abstraction (`StreamingExecutionRuntime`):
-  SSE frames forwarded as they arrive, terminal usage chunk captured,
-  `data: [DONE]` forwarded exactly once (P1.2).
-- Canonical runtime error codes: `upstream_provider_error`, `provider_timeout`,
-  `provider_unavailable`, `provider_auth_failed`, `provider_rate_limited`,
-  `capability_not_supported`, `circuit_open`, `routing_disabled`,
-  `no_local_fallback` (§16 mapping at the API face).
-- Per-provider circuit breaker (T-K8S-45): opens after N consecutive provider
-  failures; while open, requests are denied **without** a provider call.
-- Compose↔Spring datasource env alignment (`GPU_GATEWAY_DB_*`, P0.2) and real
-  config loading via `SPRING_CONFIG_ADDITIONAL_LOCATION`.
-- Tests: `ProviderRouterTest` (11), `OpenAiProviderRuntimeTest` (8),
-  `ConfiguredModelRepositoryTest` (3) — review §6 items executable at this layer.
+**Implemented** (`java/gpu-gateway`):
 
-**Declared in config, NOT yet enforced** (ticket work — do not rely on them):
+| Control / capability | Ticket | Where |
+| --- | --- | --- |
+| Routing mode `external`, fail-closed startup | T-K8S-44 | `ProviderRouter` |
+| Kill switch (`routing.external-enabled`) | T-K8S-39 | `ProviderRouter` (configuration-backed) |
+| Provider registry, per-provider credentials/headers | T-K8S-40, 43 | `ProviderRuntimeRegistry`, `providers.<id>` |
+| Logical → provider model mapping + rewrite (incl. every stream chunk) | T-K8S-41 | `ProviderRouter` → `OpenAiProviderRuntime` / `SseRelay` |
+| OpenAI-compatible adapter: chat, embeddings, rerank, streaming, usage | T-K8S-42 | `OpenAiProviderRuntime` (mock + OpenRouter) |
+| Circuit breaker | T-K8S-45 | `CircuitBreaker` (in-memory per replica) |
+| Provider health | T-K8S-46 | `ProviderHealthMonitor` |
+| Provider usage + cost ledger | T-K8S-47, 48 | `ExternalRoutingPolicy`, `cost_ledger` (V2) |
+| Budget enforcement | T-K8S-48b | `ExternalRoutingPolicy` (per tenant, UTC day) |
+| Sensitivity policy (model tags + request `data_tags`) | T-K8S-49 | `ExternalRoutingPolicy` |
+| Canonical error mapping (§16) | T-K8S-50 | `ErrorInfo.code`, `x-synanton-error-code` trailer |
+| Provider request-ID preservation | §35 | `upstream_request_id` (V3) |
+| Spend guard for capped keys | — | `providers.<id>.allowed-model-pattern` |
 
-- `providers.<id>.health` (T-K8S-46, no health scheduler yet)
-- `budget.*` (T-K8S-48b), `sensitivity.*` (T-K8S-49), `usage.cost-ledger` reporting
-  (T-K8S-48 — usage IS captured per execution; ledger/reporting pending)
-- Persisted routing control state (T-K8S-38; circuit-breaker state is in-memory
-  per replica)
+**Not implemented** (explicitly out of the current build; nothing in the contract depends on them):
 
-**Transport:** the Gateway's API is gRPC `synanton.gpu.v1` on :9090 — the same
-contract the Platform consumes (Deployment Plan v3.0.0 §4.1). There is no
-OpenAI-compatible REST face; the Responses API is deferred (§4.6).
-`scripts/smoke-test.sh` exercises the packaged stack over gRPC (`tools/gpu-grpc-call.sh`).
-
----
+- Runtime-mutable, persisted routing control state — toggles, persisted breaker/health (T-K8S-38); kill switch and provider enablement are configuration and need a restart.
+- mTLS / caller principal validation (T-K8S-7/8): gRPC is plaintext; exposure is limited to localhost (compose) or NetworkPolicy (Plan §13.1).
+- Policy-driven multi-provider selection/failover (T-K8S-52): several providers can be configured, but each catalog model maps to exactly one provider.
+- Responses API — deferred and removed from the contract (Plan §4.6).
 
 ## 1. What GPU-7 is
 
@@ -102,7 +89,7 @@ deployments/external/
 | §5.4/§39 | mode `external-only`; reject `local-only`/`auto` at startup (fail closed, §5.5) | `gpu-gateway.dispatch.strategy: external`                                                                                                                 |
 | §26/T-K8S-40 | provider registry | `gpu-gateway.providers.<id>` (code schema exists: `providers.openai`)                                                                                     |
 | T-K8S-41 | logical model → provider/model mapping | `gpu-gateway.model-catalog` (code schema exists)                                                                                                          |
-| T-K8S-42/§35 | OpenAI-compatible adapter: chat, embeddings, responses (when supported), streaming, usage, error mapping §16 | `OpenAiProviderRuntime` (generic, all configured providers) — implemented at the runtime layer; Responses API + client-facing mapping await the HTTP face |
+| T-K8S-42/§35 | OpenAI-compatible adapter: chat, embeddings, rerank (when supported), streaming, usage, error mapping §16 (Responses API deferred, Plan §4.6) | `OpenAiProviderRuntime` (generic, all configured providers) — implemented at the runtime layer; Responses API + client-facing mapping await the HTTP face |
 | T-K8S-43/§29 | provider credentials from env, never logged, HTTPS only | `providers.<id>.api-key: ${ENV_VAR}`                                                                                                                      |
 | T-K8S-44/§39 | routing modes | `gpu-gateway.routing.external-enabled`                                                                                                                    |
 | T-K8S-45 | circuit breaker per provider | `gpu-gateway.providers.<id>.circuit-breaker`                                                                                                              |

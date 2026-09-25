@@ -1,6 +1,6 @@
 # GPU-5 Homelab Implementation Plan
 
-**Status:** Execution-ready baseline — revised per PR #15 review (one inference workload per physical GPU; the colocated two-container/one-GPU design was retracted as invalid)
+**Status:** Contract defined; implementation done except execution-JWT signing/JWKS (T-K8S-6a); acceptance blocked on T-K8S-6a and the PoC run (§11, §12.2). One inference workload per physical GPU.
 **Revision date:** 2026-09-24
 **Canonical spec:** `../../doc/GPU-5  GPU-6  GPU-7 Deployment Plan.md`
 **Model setup doc:** `../../doc/GPU-5 Local Models Setup.md` (placement superseded — see D2/D4 below)
