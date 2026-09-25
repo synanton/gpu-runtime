@@ -17,6 +17,7 @@ Usage (inside the uv venv — see README.md):
   python gpu7_check.py                    # gateway at localhost:9090, compose stack already up
   python gpu7_check.py --compose          # also generate the dev PKI and start the compose stack
   python gpu7_check.py --guard-only       # only run the free-models guard + key budget check
+  python gpu7_check.py --usage            # one JSON line: spend + free-model quota (no key printed)
 """
 from __future__ import annotations
 
@@ -293,12 +294,20 @@ def main() -> int:
     ap.add_argument("--plaintext", action="store_true", help="gateway in security.mode=insecure-plaintext")
     ap.add_argument("--compose", action="store_true", help="generate PKI if missing and start the compose stack")
     ap.add_argument("--guard-only", action="store_true")
+    ap.add_argument("--usage", action="store_true",
+                    help="print the key's spend + free-model quota as one JSON line (no key) and exit; "
+                         "used as the platform retrieval-eval --spend-cmd")
     ap.add_argument("--config", default=str(CONFIG), help="gateway config to guard (default: the compose config)")
     args = ap.parse_args()
     global CONFIG_PATH
     CONFIG_PATH = args.config
 
     key = load_key()
+    if args.usage:
+        d = openrouter_get("/key", key)["data"]
+        print(json.dumps({k: d.get(k) for k in ("usage", "usage_daily", "limit", "limit_remaining",
+                                                 "limit_reset", "is_free_tier", "free_model_daily_requests")}))
+        return 0
     print("== free-models guard (OpenRouter live pricing)")
     models = free_models_guard(key)
     if args.guard_only:

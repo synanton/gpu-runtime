@@ -67,6 +67,18 @@ in `insecure-plaintext` mode). The exit code is non-zero on any failure.
 mTLS material comes from `deployments/external/scripts/gen-certs.sh`. See
 `doc/GPU Plane mTLS Setup.md`.
 
+## Spend / quota line for the platform harness
+
+```bash
+python tools/gpu7-check/gpu7_check.py --usage
+# {"usage": 0.00052275, "usage_daily": 0, "limit": 1, ..., "free_model_daily_requests": {"used": 62, "limit": 1000, "remaining": 938}}
+```
+
+One JSON line with the key's spend and free-model quota; the key itself is never printed.
+The platform retrieval harness (`retrieval-eval evaluate --gpu-plane gpu-7`) runs this before
+and after each run as its `--spend-cmd`, and rejects the run if spend rose. The provider key
+therefore stays in this repo's tooling and never enters the platform.
+
 ## Embedding probe (retrieval benchmark G0)
 
 `embed_probe.py` characterises the free OpenRouter embedding models for the platform
