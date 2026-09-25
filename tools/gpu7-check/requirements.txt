@@ -1,0 +1,5 @@
+# tools/gpu7-check — install into the uv venv (see README.md)
+grpcio==1.68.1
+grpcio-tools==1.68.1
+protobuf>=5.28,<6
+PyYAML>=6.0
