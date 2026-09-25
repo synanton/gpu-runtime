@@ -32,7 +32,7 @@ This specification is the **contract**. What the code implements and what accept
 
 | Profile | Deployment contract | Implementation | Acceptance |
 | --- | --- | --- | --- |
-| GPU-5 | Defined (this spec; `deployments/homelab/`) | Manifests, Gateway routing config, gRPC over mTLS (§13), streaming (vLLM/TEI) done. **Missing:** execution-JWT signing + JWKS (T-K8S-6a), so Envoy rejects Gateway→backend calls (fail closed) | Phases 0–4 and per-service smoke executable; **§24 end-to-end blocked on T-K8S-6a**; no PoC run yet (plan §11) |
+| GPU-5 | Defined (this spec; `deployments/homelab/`) | Manifests, Gateway routing config, gRPC over mTLS (§13), streaming (vLLM/TEI), **execution-JWT signing + JWKS (T-K8S-6a, §12.1)** and static model readiness done | Local end-to-end with the real Envoy config 17/17 (§24.1.10, §24.2.6–7); on the cluster, phases 0–4 plus the unsigned→401 check pass. **Pending:** cluster phase 5 run with the new Gateway image + key Secret, then the PoC (plan §11) |
 | GPU-7 | Defined (this spec; `deployments/external/`) | **Complete for the contract:** mTLS + tenant authorization, registry, mapping, streaming, Responses API, health, circuit breaker, cost ledger, budget, sensitivity, kill switch (config + persisted runtime control), multi-provider failover, digest-pinned packaging. Outstanding: §49 freeze attestation (reviewer sign-off) | **§37 passing:** `ExternalAcceptanceTest` (31), packaged smoke, live `tools/gpu7-check` (opencode.ai arm 15/15 current; OpenRouter free arm 20/20), §46 checklist 16/16 |
 ---
 

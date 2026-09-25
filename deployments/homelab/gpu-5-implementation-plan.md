@@ -1,6 +1,6 @@
 # GPU-5 Homelab Implementation Plan
 
-**Status:** Contract defined; implementation done except execution-JWT signing/JWKS (T-K8S-6a); acceptance blocked on T-K8S-6a and the PoC run (§11, §12.2). T-K8S-6a plan: §13 (also fixes the model-readiness poll through Envoy). One inference workload per physical GPU.
+**Status:** Contract defined. Implementation complete, including T-K8S-6a (execution-JWT signing, JWKS, static model readiness; §13): verified end to end locally with the real Envoy config (`scripts/envoy-jwt-local-test.sh`, 17/17). On the cluster: phases 0–4 plus the phase 5 negative check are done (§12 item 7). **Next:** the phase 5 cluster run with the new Gateway image and the `gpu-gateway-jwt-keys` Secret (§13.6 step 8), then the PoC baselines (§11). One inference workload per physical GPU.
 **Revision date:** 2026-09-25
 **Canonical spec:** `../../doc/GPU-5  GPU-6  GPU-7 Deployment Plan.md`
 **Model setup doc:** `../../doc/GPU-5 Local Models Setup.md` (placement superseded — see D2/D4 below)
@@ -436,7 +436,7 @@ the best-effort etcd backup on node0.
 ## 12. Known risks / follow-ups
 
 1. **vLLM 0.29.x on consumer GPUs** (D1): first-boot kernel autotune can take minutes; readiness probes use `initialDelaySeconds: 120`, `failureThreshold: 10`.
-2. **Gateway → Envoy is blocked until T-K8S-6a** (execution-JWT signing + JWKS on
+2. **Resolved in code (T-K8S-6a, §13); cluster run pending.** *Originally:* Gateway → Envoy is blocked until T-K8S-6a (execution-JWT signing + JWKS on
    :8090) lands: the gateway does not sign JWTs or serve JWKS yet, so Envoy's
    `jwt_authn` fails closed and every local execution is rejected. Phases 0–4 and
    §8.1–8.3 (direct backend smoke) are executable today; end-to-end GPU-5 execution
@@ -559,13 +559,13 @@ same way. **T-K8S-6a alone would not make GPU-5 work end to end, so this fix is 
 
 | # | Item | Needs |
 |---|---|---|
-| 1 | Spec §12 addendum (claim names, key files, :8090 listener, TTL) + this plan | — |
-| 2 | Key loader + ES256 signer + unit tests | — |
-| 3 | JWKS listener + readiness indicator + startup validation + tests | — |
-| 4 | Token on every Gateway→Envoy call (`VllmRuntime` body-bytes refactor) + tests | — |
-| 5 | Static readiness + signed `/healthz` ping (J3) + tests | — |
-| 6 | Manifests, Helm, NetworkPolicy, Envoy `forward: false` + `/healthz`, §7 commands, troubleshooting | — |
-| 7 | Local Envoy end-to-end script + run | Docker pull of the pinned Envoy image |
+| 1 | ✅ Spec §12 addendum (claim names, key files, :8090 listener, TTL) + this plan | — |
+| 2 | ✅ Key loader + ES256 signer + unit tests | — |
+| 3 | ✅ JWKS listener + readiness indicator + startup validation + tests | — |
+| 4 | ✅ Token on every Gateway→Envoy call (`VllmRuntime` body-bytes refactor) + tests | — |
+| 5 | ✅ Static readiness + signed `/healthz` ping (J3) + tests | — |
+| 6 | ✅ Manifests, Helm, NetworkPolicy, Envoy `forward: false` + `/healthz` (+ JWKS `async_fetch`), §7 commands, troubleshooting | — |
+| 7 | ✅ Local Envoy end-to-end script + run: **17/17** (`scripts/envoy-jwt-local-test.sh`) | Docker pull of the pinned Envoy image |
 | 8 | Cluster Phase 5 run → §11 baselines, status docs (this plan's status, README, spec §1a) | **Operator:** create `gpu-gateway-jwt-keys` (§7), push the Gateway image, run `deploy.sh gateway envoy` |
 
 Steps 1–7 need no GPU and no external provider. After step 8, the platform retrieval
