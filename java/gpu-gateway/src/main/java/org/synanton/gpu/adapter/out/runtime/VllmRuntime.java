@@ -10,6 +10,7 @@ import org.synanton.gpu.domain.port.out.StreamingExecutionRuntime;
 import org.synanton.gpu.domain.service.HeartbeatManager;
 import org.synanton.gpu.v1.ExecutionRequest;
 import org.synanton.gpu.v1.Operation;
+import org.synanton.gpu.adapter.out.jwt.ExecutionJwtSigner;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.boot.autoconfigure.condition.ConditionalOnProperty;
 import org.springframework.stereotype.Component;
@@ -51,10 +52,33 @@ public class VllmRuntime implements StreamingExecutionRuntime {
     private final ObjectMapper objectMapper;
     private final HeartbeatManager heartbeatManager;
     private final Duration requestTimeout;
+    /** GPU-5 execution JWT (Deployment Plan §12); null when disabled (tests, non-Envoy setups). */
+    private final ExecutionJwtSigner jwtSigner;
+    private final String healthPath;
 
     public VllmRuntime(ObjectMapper objectMapper,
                        HeartbeatManager heartbeatManager,
                        Duration dispatchTimeout) {
+        this(objectMapper, heartbeatManager, dispatchTimeout, null, "/health");
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public VllmRuntime(ObjectMapper objectMapper,
+                       HeartbeatManager heartbeatManager,
+                       Duration dispatchTimeout,
+                       org.springframework.beans.factory.ObjectProvider<ExecutionJwtSigner> jwtSigner,
+                       org.synanton.gpu.config.GpuGatewayProperties properties) {
+        this(objectMapper, heartbeatManager, dispatchTimeout, jwtSigner.getIfAvailable(),
+                properties.getDispatch().getHealthPath());
+    }
+
+    public VllmRuntime(ObjectMapper objectMapper,
+                       HeartbeatManager heartbeatManager,
+                       Duration dispatchTimeout,
+                       ExecutionJwtSigner jwtSigner,
+                       String healthPath) {
+        this.jwtSigner = jwtSigner;
+        this.healthPath = healthPath == null || healthPath.isBlank() ? "/health" : healthPath;
         this.objectMapper = objectMapper;
         this.heartbeatManager = heartbeatManager;
         this.requestTimeout = dispatchTimeout;
@@ -74,12 +98,15 @@ public class VllmRuntime implements StreamingExecutionRuntime {
         long startMs = System.currentTimeMillis();
 
         try {
-            HttpRequest httpRequest = HttpRequest.newBuilder()
+            // one byte array: hashed into the execution JWT and sent as-is (Plan §12)
+            byte[] body = request.getPayload().toByteArray();
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(endpoint))
                     .header("Content-Type", "application/json")
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(request.getPayload().toByteArray()))
-                    .timeout(requestTimeout)
-                    .build();
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                    .timeout(requestTimeout);
+            authorize(builder, request, request.getOperation().name(), body);
+            HttpRequest httpRequest = builder.build();
 
             HttpResponse<String> response = httpClient.send(httpRequest,
                     HttpResponse.BodyHandlers.ofString());
@@ -134,19 +161,28 @@ public class VllmRuntime implements StreamingExecutionRuntime {
             boolean clientWantsUsage = SseRelay.clientRequestedUsage(payload);
             SseRelay.requestStreamingWithUsage(payload);
 
-            HttpRequest httpRequest = HttpRequest.newBuilder()
+            // serialized once AFTER the stream/include_usage rewrite: the JWT hashes these bytes
+            byte[] body = objectMapper.writeValueAsBytes(payload);
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(resolveEndpoint(target.endpointUrl(), request.getOperation())))
                     .header("Content-Type", "application/json")
                     .header("Accept", "text/event-stream")
-                    .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(payload)))
-                    .timeout(requestTimeout)
-                    .build();
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(body))
+                    .timeout(requestTimeout);
+            authorize(builder, request, request.getOperation().name(), body);
+            HttpRequest httpRequest = builder.build();
             HttpResponse<java.util.stream.Stream<String>> response =
                     httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
 
             if (response.statusCode() != 200) {
                 try (var lines = response.body()) {
                     lines.forEach(l -> { }); // drain; body is not echoed (may contain prompt text)
+                }
+                if (jwtSigner != null && (response.statusCode() == 401 || response.statusCode() == 403)) {
+                    return new RuntimeResult.Failure(
+                            ExecutionError.nonRetryable("execution_jwt_rejected",
+                                    "Envoy rejected the execution JWT (HTTP " + response.statusCode() + ")"),
+                            RetryDisposition.DEFINITELY_FAILED);
                 }
                 return new RuntimeResult.Failure(
                         response.statusCode() >= 500
@@ -201,11 +237,15 @@ public class VllmRuntime implements StreamingExecutionRuntime {
     @Override
     public RuntimeStatus ping(String executionId, RuntimeTarget target) {
         try {
-            HttpRequest request = HttpRequest.newBuilder()
-                    .uri(URI.create(target.endpointUrl() + "/health"))
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
+                    .uri(URI.create(target.endpointUrl() + healthPath))
                     .GET()
-                    .timeout(Duration.ofSeconds(5))
-                    .build();
+                    .timeout(Duration.ofSeconds(5));
+            if (jwtSigner != null) {
+                builder.header("Authorization", "Bearer " + jwtSigner.sign(
+                        new ExecutionJwtSigner.Subject("HEALTH", null, null, executionId, null), new byte[0]));
+            }
+            HttpRequest request = builder.build();
 
             HttpResponse<String> response = httpClient.send(request,
                     HttpResponse.BodyHandlers.ofString());
@@ -219,10 +259,28 @@ public class VllmRuntime implements StreamingExecutionRuntime {
         }
     }
 
+    /** Attach the GPU-5 execution JWT over {@code body} (no-op when the JWT is disabled). */
+    private void authorize(HttpRequest.Builder builder, ExecutionRequest request, String operation, byte[] body) {
+        if (jwtSigner == null) {
+            return;
+        }
+        String principal = org.synanton.gpu.adapter.in.grpc.CallerPrincipalInterceptor.PRINCIPAL.get();
+        builder.header("Authorization", "Bearer " + jwtSigner.sign(new ExecutionJwtSigner.Subject(
+                operation, request.getModel(), request.getTenantId(), request.getRequestId(), principal), body));
+    }
+
     private RuntimeResult parseResponse(HttpResponse<String> response,
                                          long durationMs,
                                          String runtimeClass) {
         int status = response.statusCode();
+
+        if (jwtSigner != null && (status == 401 || status == 403)) {
+            // Envoy's jwt_authn refused the execution JWT: a perimeter/config fault, not a model error
+            return new RuntimeResult.Failure(
+                    ExecutionError.nonRetryable("execution_jwt_rejected",
+                            "Envoy rejected the execution JWT (HTTP " + status + "): check JWKS / keys / clock"),
+                    RetryDisposition.DEFINITELY_FAILED);
+        }
 
         if (status >= 400 && status < 500) {
             return new RuntimeResult.Failure(
