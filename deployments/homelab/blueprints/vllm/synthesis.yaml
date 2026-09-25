@@ -32,7 +32,7 @@ spec:
           image: local-registry:5000/vllm-openai:v0.29.0
           imagePullPolicy: IfNotPresent
           args:
-            - serve
+            # the vllm-openai image ENTRYPOINT is already [\"vllm\", \"serve\"]: the model path comes first
             - /models
             - --served-model-name
             - synanton-qwen3-4b-synthesis
@@ -67,21 +67,34 @@ spec:
             - name: model
               mountPath: /models
               readOnly: true
+            # torch.compile / CUDA-graph cache: an emptyDir survives container restarts in the
+            # pod, so a restart doesn't pay the multi-minute cold compile again
+            - name: vllm-cache
+              mountPath: /root/.cache/vllm
+          # Cold start (weights + torch.compile + CUDA graphs) measured at ~4.5 min on the
+          # RTX 5060 Ti. The old liveness window (180 s + 3×30 s) killed it just before it
+          # served. The startup probe allows up to 15 min; liveness/readiness start after it.
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 90
           readinessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 120 # first-boot kernel autotune can take minutes
             periodSeconds: 15
-            failureThreshold: 10
+            failureThreshold: 3
           livenessProbe:
             httpGet:
               path: /health
               port: 8000
-            initialDelaySeconds: 180
             periodSeconds: 30
             failureThreshold: 3
       volumes:
+        - name: vllm-cache
+          emptyDir: {}
         - name: model
           hostPath:
             path: /mnt/local-fast/models/qwen3-4b-instruct-2507

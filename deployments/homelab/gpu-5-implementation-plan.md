@@ -441,6 +441,11 @@ the best-effort etcd backup on node0.
 5. **Mirrored model copies** (D3/§4.6): models are deliberately mirrored on all nodes (operator practice); the only pure leftover is node2's flat `qwen3-embedding-0.6b`. Harmless either way — hostPath reads only the local copy.
 6. **GPU-7 external profile**: the PR #15 review's remaining blockers (Compose↔Spring datasource env mismatch, mock-provider dispatch, external routing strategy, model-ID rewriting, streaming, expanded acceptance tests) are gateway-code items in `deployments/external/` and the platform `gpu-gateway` module — tracked in PR #15, out of scope for this GPU-5 local-only plan. GPU-5 is unaffected: it runs `local-only` mode with no external dispatch.
 
+7. **Fixed during the first cluster bring-up (2026-09-25).** Phases 0–4 plus the phase 5 negative check run on the cluster. Every direct-backend smoke test passes (§8.1–8.3), Envoy rejects unsigned requests (401), and Gateway `GetModels` over mTLS lists the three IDs. Three manifest bugs were fixed (blueprint and Helm):
+   - **vLLM args:** the `vllm-openai` image ENTRYPOINT is already `["vllm","serve"]`, so the leading `serve` arg made vLLM exit with "unrecognized arguments: /models". Removed.
+   - **Envoy probes:** the admin interface is bound to `127.0.0.1:9901`, so kubelet probes got "connection refused" and liveness restarted Envoy in a loop. A new probe listener on `:9902` proxies only `GET /ready` to the admin interface, which stays private.
+   - **vLLM probes:** cold start (weights + torch.compile + CUDA graphs) measured about 1 min for the reranker (RTX 4060 Ti) and about 4.5 min for synthesis (RTX 5060 Ti). The old liveness window (180 s + 3×30 s) killed synthesis just before it served, and the compile cache sat in the container filesystem, so every restart recompiled and the pod never converged. The fix is a `startupProbe` allowing up to 15 min, plus an `emptyDir` at `/root/.cache/vllm`.
+
 ## 13. T-K8S-6a plan — execution-JWT signing + JWKS (planned 2026-09-25)
 
 **Goal:** unblock GPU-5 end-to-end execution (Gateway → Envoy → TEI/vLLM) per spec §12 and
