@@ -127,12 +127,20 @@ needed to issue new certificates.
 The Platform connects with its own client certificate (CN `synanton-platform`):
 
 ```bash
-GPU_GATEWAY_ENDPOINT=localhost:9090
-GPU_GATEWAY_TLS_ENABLED=true
-GPU_GATEWAY_TLS_CA=/etc/synanton/gpu-tls/ca.crt
-GPU_GATEWAY_TLS_CERT=/etc/synanton/gpu-tls/synanton-platform.crt
-GPU_GATEWAY_TLS_KEY=/etc/synanton/gpu-tls/synanton-platform.key
+GATEWAY_GPU_ENABLED=true
+GPU_GATEWAY_ENDPOINT=localhost:9090          # host must match a server SAN (§1)…
+GPU_TLS_ENABLED=true
+GPU_TLS_CA_PATH=/etc/synanton/gpu-tls/ca.crt
+GPU_TLS_CERT_PATH=/etc/synanton/gpu-tls/synanton-platform.crt
+GPU_TLS_KEY_PATH=/etc/synanton/gpu-tls/synanton-platform.key
+GPU_TLS_AUTHORITY=gpu-gateway                # …or override the TLS authority (optional)
 ```
+
+(`gateway.gpu.tls.*` in `platform/java/gateway/src/main/resources/application.yml`.)
+With `GPU_TLS_ENABLED=true` and a missing/unreadable file the client fails closed.
+The client never retries non-retryable denials (`tenant_not_allowed`,
+`budget_exceeded`, `sensitive_model_external_blocked`, …) and logs the canonical code
+and `upstream_request_id`.
 
 Copy `ca.crt`, `synanton-platform.crt` and `synanton-platform.key` from the PKI
 directory to the Platform host. On Kubernetes, use a Secret in the Platform's
