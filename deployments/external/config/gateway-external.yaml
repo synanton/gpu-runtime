@@ -89,6 +89,9 @@ gpu-gateway:
             provider-model-id: liquid/lfm-2.5-2.6b:free
             input-usd-per-million: 0
             output-usd-per-million: 0
+            fallbacks:           # T-K8S-52: tried only if the primary did not accept the request
+              - provider: OPENAI    # (e.g. OpenRouter free-tier 429); must also be ':free'
+                provider-model-id: nvidia/nemotron-3-super-120b-a12b:free
             display-name: "LFM 2.5 2.6B (OpenRouter free)"
             max-input-tokens: 65536
             max-output-tokens: 2048

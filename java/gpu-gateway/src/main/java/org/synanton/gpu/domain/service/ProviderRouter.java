@@ -86,6 +86,22 @@ public class ProviderRouter {
                                 + ".allowed-model-pattern — failing closed per spec §5.5");
                     }
                 }));
+        // fallbacks: never LOCAL, and the same spend guard as primary mappings
+        properties.getModelCatalog().getOperations().forEach((op, models) ->
+                models.getModels().forEach((logicalId, info) -> info.getFallbacks().forEach(fb -> {
+                    String providerId = fb.getProvider() == null ? "" : fb.getProvider().toLowerCase(java.util.Locale.ROOT);
+                    if (RoutingDecision.LOCAL_PROVIDER.equals(providerId)) {
+                        throw new IllegalStateException("model '" + logicalId + "' lists a LOCAL fallback — "
+                                + "external routing never falls back to local (invariant 1)");
+                    }
+                    GpuGatewayProperties.ProviderConfig provider = properties.getProviders().get(providerId);
+                    String pattern = provider == null ? null : provider.getAllowedModelPattern();
+                    String pid = fb.getProviderModelId() == null ? logicalId : fb.getProviderModelId();
+                    if (pattern != null && !pattern.isBlank() && !pid.matches(pattern)) {
+                        throw new IllegalStateException("fallback '" + pid + "' of model '" + logicalId
+                                + "' violates providers." + providerId + ".allowed-model-pattern");
+                    }
+                })));
     }
 
     public boolean isExternal() {
@@ -119,6 +135,48 @@ public class ProviderRouter {
                     "external routing kill switch is OFF (gpu-gateway.routing.external-enabled)");
         }
         return externalDecision(logicalModelId, operation);
+    }
+
+    /**
+     * T-K8S-52: the primary decision ({@link #route} — unchanged semantics, same denials)
+     * followed by the model's configured external fallbacks, in order. Fallbacks that are
+     * not usable (unknown/disabled/credential-less provider) are skipped, never LOCAL.
+     */
+    public java.util.List<RoutingDecision> routeWithFallbacks(ExecutionRequest request) {
+        java.util.List<RoutingDecision> out = new java.util.ArrayList<>();
+        RoutingDeniedException primaryUnavailable = null;
+        try {
+            RoutingDecision primary = route(request);
+            out.add(primary);
+            if (primary.isLocal()) {
+                return out;
+            }
+        } catch (RoutingDeniedException e) {
+            // a disabled primary is skippable when a usable fallback exists; every other
+            // denial (kill switch, local fallback, unknown model, …) is final
+            if (!"provider_unavailable".equals(e.getCode())) {
+                throw e;
+            }
+            primaryUnavailable = e;
+        }
+        modelCatalogService.modelInfo(request.getModel(), request.getOperation()).ifPresent(info -> {
+            for (var fb : info.getFallbacks()) {
+                String providerId = fb.getProvider() == null ? "" : fb.getProvider().toLowerCase(java.util.Locale.ROOT);
+                GpuGatewayProperties.ProviderConfig provider = properties.getProviders().get(providerId);
+                if (RoutingDecision.LOCAL_PROVIDER.equals(providerId) || provider == null || !provider.isUsable()) {
+                    log.warn("Fallback {} for model {} is not usable; skipped", providerId, request.getModel());
+                    continue;
+                }
+                out.add(new RoutingDecision(request.getModel(), providerId,
+                        fb.getProviderModelId() == null ? request.getModel() : fb.getProviderModelId(),
+                        request.getOperation(), provider.getBaseUrl(), provider.getApiKey(),
+                        RoutingDecision.MODE_EXTERNAL));
+            }
+        });
+        if (out.isEmpty()) {
+            throw primaryUnavailable;
+        }
+        return out;
     }
 
     /** Catalog-driven external decision; shared by external mode and mixed-mode OPENAI requests. */

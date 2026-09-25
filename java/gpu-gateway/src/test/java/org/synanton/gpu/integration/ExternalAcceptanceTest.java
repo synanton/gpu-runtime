@@ -88,6 +88,10 @@ class ExternalAcceptanceTest {
                 }
                 respond(ex, 200, "{}");
             });
+            FAKE.createContext("/busy/v1/chat/completions", ex -> {
+                read(ex, "busy");
+                respond(ex, 503, "{\"error\":{\"message\":\"overloaded\"}}");
+            });
             FAKE.createContext("/local", ex -> {
                 read(ex, "local-vllm");
                 respond(ex, 200, "{}");
@@ -447,5 +451,61 @@ class ExternalAcceptanceTest {
         assertDenied(() -> control.setExternalRouting(SetExternalRoutingRequest.newBuilder()
                         .setEnabled(false).build()),
                 Status.Code.INVALID_ARGUMENT, "invalid_request"); // reason required
+    }
+
+    // ─── T-K8S-52: multi-provider failover (never local, never a duplicate execution) ───
+
+    @Test
+    void notAcceptedPrimaryFailsOverToTheNextProvider() throws Exception {
+        int busyBefore = hits("busy");
+        ExecutionResponse r = stub.execute(chat("failover-chat"));
+
+        assertThat(r.getState()).isEqualTo(ExecutionState.SUCCESS);
+        assertThat(hits("busy")).isEqualTo(busyBefore + 1);
+        assertThat(LAST_UPSTREAM_MODEL.get("good-chat")).isEqualTo("openai/gpt-4o"); // fallback's provider model ID
+        assertThat(JSON.readTree(r.getResult().toStringUtf8()).path("model").asText()).isEqualTo("failover-chat");
+        Map<String, Object> row = jdbc.queryForMap(
+                "SELECT provider_id, cost_usd FROM cost_ledger WHERE execution_id = ?", r.getExecutionId());
+        assertThat(row.get("provider_id")).as("ledger records the provider that served").isEqualTo("mock");
+        assertThat((BigDecimal) row.get("cost_usd")).as("fallback prices").isEqualByComparingTo("0.000033"); // (7*3+3*4)/1e6
+    }
+
+    @Test
+    void connectionRefusedPrimaryFailsOver() {
+        assertThat(stub.execute(chat("dead-failover-chat")).getState()).isEqualTo(ExecutionState.SUCCESS);
+    }
+
+    @Test
+    void acceptedFailureIsNeverRetriedOnAnotherProvider() {
+        int mockBefore = hits("good-chat");
+        ExecutionResponse r = stub.execute(chat("accepted-500-chat"));
+
+        assertFailed(r, "upstream_provider_error"); // 500: the provider may have executed it
+        assertThat(hits("good-chat")).as("no duplicate execution on the fallback").isEqualTo(mockBefore);
+    }
+
+    @Test
+    void allCandidatesDownFailsWithTheLastErrorAndNeverFallsBackToLocal() {
+        ExecutionResponse r = stub.execute(chat("all-down-chat"));
+
+        assertFailed(r, "provider_unavailable");
+        // @AfterEach: the local vLLM fake was not called
+    }
+
+    @Test
+    void disabledPrimaryIsSkippedBeforeAdmission() {
+        assertThat(stub.execute(chat("offline-primary-chat")).getState()).isEqualTo(ExecutionState.SUCCESS);
+        assertThat(stub.getModels(GetModelsRequest.newBuilder().setOperation(Operation.SYNTHESIZE).build())
+                .getModelsList()).extracting(ModelInfo::getModelId)
+                .as("advertised: servable through its fallback").contains("offline-primary-chat");
+    }
+
+    @Test
+    void streamingFailsOverBeforeTheFirstChunk() throws Exception {
+        List<ExecutionChunk> chunks = stream(chat("failover-chat"));
+
+        assertThat(chunks).hasSize(4);
+        assertThat(JSON.readTree(chunks.get(0).getData().toStringUtf8()).path("model").asText()).isEqualTo("failover-chat");
+        assertThat(chunks.get(3).getTerminal().getState()).isEqualTo(ExecutionState.SUCCESS);
     }
 }

@@ -15,6 +15,8 @@ import lombok.RequiredArgsConstructor;
 import lombok.extern.slf4j.Slf4j;
 import org.springframework.stereotype.Service;
 
+import java.util.ArrayList;
+import java.util.List;
 import java.util.Optional;
 
 /**
@@ -84,22 +86,46 @@ public class ExecuteService implements ExecuteUseCase {
         // Routing is decided BEFORE admission: denied requests are never persisted.
         // Throws RoutingDeniedException on any fail-closed rule (kill switch,
         // unknown model/provider, disabled provider, local fallback attempt).
-        RoutingDecision decision = providerRouter.route(request);
-        log.info("Routing decision: {}", decision);
-        // GPU-7 controls (sensitivity, provider health, budget) — fail closed, before admission
-        externalRoutingPolicy.check(decision, request);
-        // Resolve the external runtime before admission too, so a missing runtime is a
-        // denial — never an admitted execution left dangling in ACCEPTED.
-        ExecutionRuntime runtime = decision.isLocal() ? vllmRuntime
-                : providerRuntimeRegistry.get(decision.providerId())
-                        .orElseThrow(() -> new RoutingDeniedException("provider_unavailable",
-                                "provider '" + decision.providerId() + "' has no runtime"));
-        if (streaming && (request.getOperation() != org.synanton.gpu.v1.Operation.SYNTHESIZE
-                || !runtime.supportsStreaming())) {
+        List<RoutingDecision> candidates = providerRouter.routeWithFallbacks(request);
+        RoutingDecision decision = candidates.get(0);
+        log.info("Routing decision: {} (+{} fallback(s))", decision, candidates.size() - 1);
+        if (streaming && request.getOperation() != org.synanton.gpu.v1.Operation.SYNTHESIZE) {
             // §10.1: never silently fall back to unary
             throw new RoutingDeniedException("capability_not_supported",
-                    "streaming is supported for SYNTHESIZE on streaming-capable runtimes only");
+                    "streaming is supported for SYNTHESIZE only");
         }
+        // GPU-7 controls (sensitivity, provider health, budget, runtime control) per candidate —
+        // fail closed, before admission. Only provider_unavailable is skippable (T-K8S-52);
+        // every other denial applies to all candidates and is final. The runtime is resolved
+        // here too, so a missing runtime is a denial, never an execution dangling in ACCEPTED.
+        List<Candidate> usable = new ArrayList<>();
+        RoutingDeniedException skipped = null;
+        for (RoutingDecision candidate : candidates) {
+            ExecutionRuntime rt;
+            try {
+                externalRoutingPolicy.check(candidate, request);
+                rt = candidate.isLocal() ? vllmRuntime
+                        : providerRuntimeRegistry.get(candidate.providerId())
+                                .orElseThrow(() -> new RoutingDeniedException("provider_unavailable",
+                                        "provider '" + candidate.providerId() + "' has no runtime"));
+            } catch (RoutingDeniedException e) {
+                if (!"provider_unavailable".equals(e.getCode())) {
+                    throw e;
+                }
+                skipped = skipped == null ? e : skipped;
+                continue;
+            }
+            if (streaming && !rt.supportsStreaming()) {
+                skipped = skipped == null ? new RoutingDeniedException("capability_not_supported",
+                        "streaming is supported on streaming-capable runtimes only") : skipped;
+                continue;
+            }
+            usable.add(new Candidate(candidate, rt));
+        }
+        if (usable.isEmpty()) {
+            throw skipped;
+        }
+        ExecutionRuntime runtime = usable.get(0).runtime();
         Dispatch dispatch = streaming
                 ? (rt, target) -> rt.executeStreaming(request, target, listener)
                 : (rt, target) -> rt.execute(request, target);
@@ -116,10 +142,11 @@ public class ExecuteService implements ExecuteUseCase {
         if (decision.isLocal()) {
             return loadAndDispatchLocal(request, admitted, dispatch);
         }
-        Execution done = dispatchExternal(request, admitted, decision, runtime, dispatch);
-        externalRoutingPolicy.recordUsage(decision, request, done); // cost ledger (T-K8S-48)
-        return done;
+        return dispatchExternal(request, admitted, usable, dispatch);
     }
+
+    /** A routing candidate with its resolved runtime. */
+    private record Candidate(RoutingDecision decision, ExecutionRuntime runtime) {}
 
     /** Local (GPU-5) path: model load phase + vLLM dispatch. */
     private Execution loadAndDispatchLocal(ExecutionRequest request, Execution admitted, Dispatch dispatch) {
@@ -178,22 +205,41 @@ public class ExecuteService implements ExecuteUseCase {
      * The runtime rewrites the payload's model to the provider model ID (P1.1)
      * and restores the logical ID on every downstream body, including SSE chunks (P1.2).
      */
+    /**
+     * External dispatch with T-K8S-52 failover: the next candidate is tried only when the
+     * current provider did NOT accept the request ({@link RetryDisposition#NOT_ACCEPTED}:
+     * connect failure, open circuit, 429, 502/503/504) — so a request is never executed
+     * twice. For streams this also means no frame has been emitted yet. Never local.
+     */
     private Execution dispatchExternal(ExecutionRequest request, Execution admitted,
-                                       RoutingDecision decision, ExecutionRuntime runtime,
-                                       Dispatch dispatch) {
+                                       List<Candidate> candidates, Dispatch dispatch) {
         String executionId = admitted.executionId();
-
-        RuntimeTarget target = providerRuntimeRegistry.targetFor(decision);
-
         executionRepository.transitionState(executionId, ExecutionState.ACCEPTED, ExecutionState.QUEUED);
         executionRepository.transitionState(executionId, ExecutionState.QUEUED, ExecutionState.RUNNING);
-        log.info("Dispatching execution_id={} provider={} mode=external",
-                executionId, decision.providerId());
 
         HeartbeatManager.HeartbeatHandle heartbeat = heartbeatManager.start(executionId);
         try {
-            ExecutionRuntime.RuntimeResult result = dispatch.run(runtime, target);
-            return recordResult(executionId, result);
+            ExecutionRuntime.RuntimeResult result = null;
+            RoutingDecision served = null;
+            for (int i = 0; i < candidates.size(); i++) {
+                Candidate c = candidates.get(i);
+                served = c.decision();
+                log.info("Dispatching execution_id={} provider={} mode=external attempt={}/{}",
+                        executionId, served.providerId(), i + 1, candidates.size());
+                result = dispatch.run(c.runtime(), providerRuntimeRegistry.targetFor(served));
+                boolean notAccepted = result instanceof ExecutionRuntime.RuntimeResult.Failure f
+                        && f.disposition() == RetryDisposition.NOT_ACCEPTED;
+                if (!notAccepted || i == candidates.size() - 1) {
+                    break;
+                }
+                log.warn("Provider {} did not accept execution_id={} ({}); failing over to {}",
+                        served.providerId(), executionId,
+                        ((ExecutionRuntime.RuntimeResult.Failure) result).error().code(),
+                        candidates.get(i + 1).decision().providerId());
+            }
+            Execution done = recordResult(executionId, result);
+            externalRoutingPolicy.recordUsage(served, request, done); // cost ledger (T-K8S-48)
+            return done;
         } finally {
             heartbeat.stop();
         }

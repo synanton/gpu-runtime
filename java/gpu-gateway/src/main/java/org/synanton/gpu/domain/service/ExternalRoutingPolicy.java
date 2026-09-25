@@ -120,10 +120,19 @@ public class ExternalRoutingPolicy {
         ExecutionUsage usage = execution.usage();
         BigDecimal cost = null;
         var info = catalog.modelInfo(decision.logicalModelId(), decision.operation());
-        if (usage != null && info.isPresent() && info.get().getInputUsdPerMillion() != null
-                && info.get().getOutputUsdPerMillion() != null) {
-            cost = info.get().getInputUsdPerMillion().multiply(BigDecimal.valueOf(usage.inputTokens()))
-                    .add(info.get().getOutputUsdPerMillion().multiply(BigDecimal.valueOf(usage.outputTokens())))
+        BigDecimal in = info.map(i -> i.getInputUsdPerMillion()).orElse(null);
+        BigDecimal out = info.map(i -> i.getOutputUsdPerMillion()).orElse(null);
+        // a fallback (T-K8S-52) may carry its own prices; otherwise it inherits the model's
+        for (var fb : info.map(i -> i.getFallbacks()).orElse(java.util.List.of())) {
+            if (fb.getProvider() != null && fb.getProvider().equalsIgnoreCase(decision.providerId())
+                    && java.util.Objects.equals(fb.getProviderModelId(), decision.providerModelId())) {
+                in = fb.getInputUsdPerMillion() != null ? fb.getInputUsdPerMillion() : in;
+                out = fb.getOutputUsdPerMillion() != null ? fb.getOutputUsdPerMillion() : out;
+            }
+        }
+        if (usage != null && in != null && out != null) {
+            cost = in.multiply(BigDecimal.valueOf(usage.inputTokens()))
+                    .add(out.multiply(BigDecimal.valueOf(usage.outputTokens())))
                     .divide(MILLION, MathContext.DECIMAL64);
         }
         try {

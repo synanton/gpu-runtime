@@ -79,6 +79,9 @@ def catalog_real_models() -> list[tuple[str, str, str]]:
         for logical, info in (ops.get("models") or {}).items():
             if str(info.get("provider", "")).lower() == REAL_PROVIDER:
                 out.append((op, logical, info.get("provider-model-id", logical)))
+            for fb in info.get("fallbacks") or []:           # T-K8S-52 fallbacks are guarded too
+                if str(fb.get("provider", "")).lower() == REAL_PROVIDER:
+                    out.append((op + "*", logical + " (fallback)", fb.get("provider-model-id", logical)))
     return out
 
 
@@ -163,7 +166,7 @@ def run_live(pb, rpc, stub, models, c: Checks, tenant: str):
                                    payload=json.dumps(payload).encode(), data_tags=kw.get("tags", []))
 
     chat = next((m for m in models if m[0] == "SYNTHESIZE"), None)
-    embed = next((m for m in models if m[0] == "EMBED"), None)
+    embed = next((m for m in models if m[0] == "EMBED"), None)  # "*"-suffixed ops are fallbacks
     provider_ids = [pid for _, _, pid in models]
 
     listed = stub.GetModels(pb.GetModelsRequest(operation=pb.SYNTHESIZE), timeout=30)

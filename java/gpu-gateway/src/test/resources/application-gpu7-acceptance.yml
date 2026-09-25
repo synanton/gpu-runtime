@@ -13,6 +13,7 @@ gpu-gateway:
     slow:    { base-url: "${fake.base}/slow/v1",    api-key: k, circuit-breaker: { failure-threshold: 100 } }
     fragile: { base-url: "${fake.base}/fragile/v1", api-key: k, circuit-breaker: { failure-threshold: 2, reset-seconds: 300 } }
     dead:    { base-url: "http://127.0.0.1:1/v1",   api-key: k, circuit-breaker: { failure-threshold: 100 } }
+    busy:    { base-url: "${fake.base}/busy/v1",    api-key: k, circuit-breaker: { failure-threshold: 100 } }
     offline: { base-url: "${fake.base}/good/v1",    api-key: k, enabled: false }
   model-catalog:
     operations:
@@ -27,6 +28,17 @@ gpu-gateway:
           dead-chat:      { provider: DEAD,    provider-model-id: up-dead,    input-usd-per-million: 1, output-usd-per-million: 2 }
           off-chat:       { provider: OFFLINE, provider-model-id: up-off,     input-usd-per-million: 1, output-usd-per-million: 2 }
           shared-local:   { provider: LOCAL,   provider-model-id: shared-local }
+          # T-K8S-52 failover cases
+          failover-chat:      { provider: BUSY,  provider-model-id: up-busy, input-usd-per-million: 1, output-usd-per-million: 2,
+                                fallbacks: [ { provider: MOCK, provider-model-id: openai/gpt-4o, input-usd-per-million: 3, output-usd-per-million: 4 } ] }
+          dead-failover-chat: { provider: DEAD,  provider-model-id: up-dead, input-usd-per-million: 1, output-usd-per-million: 2,
+                                fallbacks: [ { provider: MOCK, provider-model-id: openai/gpt-4o } ] }
+          accepted-500-chat:  { provider: FLAKY, provider-model-id: up-flaky, input-usd-per-million: 1, output-usd-per-million: 2,
+                                fallbacks: [ { provider: MOCK, provider-model-id: openai/gpt-4o } ] }
+          all-down-chat:      { provider: BUSY,  provider-model-id: up-busy, input-usd-per-million: 1, output-usd-per-million: 2,
+                                fallbacks: [ { provider: DEAD, provider-model-id: up-dead } ] }
+          offline-primary-chat: { provider: OFFLINE, provider-model-id: up-off, input-usd-per-million: 1, output-usd-per-million: 2,
+                                fallbacks: [ { provider: MOCK, provider-model-id: openai/gpt-4o } ] }
       EMBED:
         default-model: shared-embed
         models:

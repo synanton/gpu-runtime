@@ -226,4 +226,39 @@ class ProviderRouterTest {
                 .route(request("gpt-4o-mini", Operation.SYNTHESIZE));
         assertThat(d.providerModelId()).isEqualTo("liquid/lfm-2.5-2.6b:free");
     }
+
+    private void fallback(String logicalId, String provider, String providerModelId) {
+        var fb = new GpuGatewayProperties.ModelCatalog.OperationModels.ModelInfo.Fallback();
+        fb.setProvider(provider);
+        fb.setProviderModelId(providerModelId);
+        properties.getModelCatalog().getOperations().get("SYNTHESIZE").getModels().get(logicalId).getFallbacks().add(fb);
+    }
+
+    @Test
+    void routeWithFallbacksKeepsPrimaryFirstThenUsableFallbacks() {
+        fallback("mock-chat-1", "OPENAI", "openai/gpt-4o");
+        fallback("mock-chat-1", "GHOST", "x"); // not configured → skipped
+        router = new ProviderRouter(properties, new ModelCatalogService(properties));
+
+        assertThat(router.routeWithFallbacks(request("mock-chat-1", Operation.SYNTHESIZE)))
+                .extracting(RoutingDecision::providerId).containsExactly("mock", "openai");
+    }
+
+    @Test
+    void localFallbackFailsClosedAtStartup() {
+        fallback("mock-chat-1", "LOCAL", "anything");
+
+        assertThatThrownBy(() -> new ProviderRouter(properties, new ModelCatalogService(properties)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("LOCAL fallback");
+    }
+
+    @Test
+    void paidFallbackViolatesTheSpendGuard() {
+        properties.getProviders().get("openai").setAllowedModelPattern(".*:free");
+        catalog("SYNTHESIZE", "gpt-4o-mini", "OPENAI", "liquid/lfm-2.5-2.6b:free");
+        fallback("mock-chat-1", "OPENAI", "openai/gpt-4o");
+
+        assertThatThrownBy(() -> new ProviderRouter(properties, new ModelCatalogService(properties)))
+                .isInstanceOf(IllegalStateException.class).hasMessageContaining("fallback 'openai/gpt-4o'");
+    }
 }

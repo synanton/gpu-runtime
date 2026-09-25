@@ -39,7 +39,15 @@ public class ModelCatalogService {
             return !external;
         }
         GpuGatewayProperties.ProviderConfig config = properties.getProviders().get(provider);
-        return config != null && config.isUsable();
+        if (config != null && config.isUsable()) {
+            return true;
+        }
+        // T-K8S-52: servable through a usable external fallback
+        return info.getFallbacks().stream().anyMatch(fb -> {
+            GpuGatewayProperties.ProviderConfig c = fb.getProvider() == null ? null
+                    : properties.getProviders().get(fb.getProvider().toLowerCase(java.util.Locale.ROOT));
+            return c != null && c.isUsable();
+        });
     }
 
     /**

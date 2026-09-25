@@ -40,7 +40,12 @@ public class GetModelsService implements GetModelsUseCase {
             }
             boolean visible;
             try {
-                visible = externalOn && routingControl.providerEnabled(provider);
+                visible = externalOn && (routingControl.providerEnabled(provider)
+                        // T-K8S-52: or servable through a runtime-enabled fallback
+                        || modelCatalogService.modelInfo(m.getModelId(), request.getOperation())
+                                .map(info -> info.getFallbacks().stream().anyMatch(fb -> fb.getProvider() != null
+                                        && routingControl.providerEnabled(fb.getProvider().toLowerCase(java.util.Locale.ROOT))))
+                                .orElse(false));
             } catch (RoutingDeniedException e) {
                 visible = false;
             }

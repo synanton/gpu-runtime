@@ -248,6 +248,32 @@ public class GpuGatewayProperties {
                 private java.math.BigDecimal inputUsdPerMillion;
                 private java.math.BigDecimal outputUsdPerMillion;
 
+                /**
+                 * T-K8S-52 ordered external fallbacks, tried only when a provider did not
+                 * accept the request. Never LOCAL (startup fails otherwise).
+                 */
+                private java.util.List<Fallback> fallbacks = new java.util.ArrayList<>();
+
+                public java.util.List<Fallback> getFallbacks() { return fallbacks; }
+                public void setFallbacks(java.util.List<Fallback> fallbacks) { this.fallbacks = fallbacks; }
+
+                public static class Fallback {
+                    private String provider;
+                    private String providerModelId;
+                    /** Optional; default to the model's prices. */
+                    private java.math.BigDecimal inputUsdPerMillion;
+                    private java.math.BigDecimal outputUsdPerMillion;
+
+                    public String getProvider() { return provider; }
+                    public void setProvider(String provider) { this.provider = provider; }
+                    public String getProviderModelId() { return providerModelId; }
+                    public void setProviderModelId(String providerModelId) { this.providerModelId = providerModelId; }
+                    public java.math.BigDecimal getInputUsdPerMillion() { return inputUsdPerMillion; }
+                    public void setInputUsdPerMillion(java.math.BigDecimal v) { this.inputUsdPerMillion = v; }
+                    public java.math.BigDecimal getOutputUsdPerMillion() { return outputUsdPerMillion; }
+                    public void setOutputUsdPerMillion(java.math.BigDecimal v) { this.outputUsdPerMillion = v; }
+                }
+
                 public java.util.List<String> getTags() { return tags; }
                 public void setTags(java.util.List<String> tags) { this.tags = tags; }
                 public java.math.BigDecimal getInputUsdPerMillion() { return inputUsdPerMillion; }

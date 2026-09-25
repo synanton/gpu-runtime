@@ -1301,6 +1301,18 @@ Invalid routing mode configuration MUST prevent readiness.
 
 ---
 
+# 39a. GPU-7 Multi-Provider Failover (T-K8S-52)
+
+A catalog model may list ordered external `fallbacks` (`provider`, `provider-model-id`, optional prices). Failover rules:
+
+* A fallback is tried **only when the current provider did not accept the request**: connect failure, open circuit, 429, 502/503/504, or a provider that is disabled, unhealthy or runtime-disabled before dispatch. An accepted request that then fails (e.g. provider 500, timeout, broken stream) is **never re-sent**, so no request executes twice. For streams, no chunk has been emitted when failover happens.
+* Sensitivity, budget and the kill switch apply to every candidate. Their denials are final and never trigger failover.
+* A fallback is never LOCAL (startup fails otherwise, invariant 1). `allowed-model-pattern` applies to fallbacks too.
+* The cost ledger records the provider that served, at the fallback's prices when set, otherwise the model's.
+* `GetModels` advertises a model if any candidate is usable.
+
+**Implementation state:** implemented (`ProviderRouter.routeWithFallbacks`, `ExecuteService`); covered by `ExternalAcceptanceTest`.
+
 # 40. Rerank and Provider Compatibility
 
 Rerank is not assumed to be universally supported by external providers.
