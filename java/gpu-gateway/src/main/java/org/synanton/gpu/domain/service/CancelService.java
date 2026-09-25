@@ -1,5 +1,6 @@
 package org.synanton.gpu.domain.service;
 
+import org.synanton.gpu.adapter.out.runtime.RuntimeFactory;
 import org.synanton.gpu.domain.model.Execution;
 import org.synanton.gpu.domain.model.ExecutionError;
 import org.synanton.gpu.domain.model.ExecutionState;
@@ -24,7 +25,7 @@ import java.util.Optional;
 public class CancelService implements CancelUseCase {
 
     private final ExecutionRepository executionRepository;
-    private final ExecutionRuntime executionRuntime;
+    private final RuntimeFactory runtimeFactory;
     private final ExecutionScheduler executionScheduler;
     private final ModelRepository modelRepository;
 
@@ -45,8 +46,9 @@ public class CancelService implements CancelUseCase {
         // Attempt runtime cancellation — best-effort, no transaction needed
         if (execution.state() == ExecutionState.RUNNING && execution.runtimeClass() != null) {
             modelRepository.getCapabilities(execution.modelId())
-                    .map(caps -> executionScheduler.schedule(null, caps))
-                    .ifPresent(target -> executionRuntime.cancel(executionId, target));
+                    .map(caps -> runtimeFactory.bindingFor(
+                            execution.runtimeClass(), executionScheduler.schedule(null, caps)))
+                    .ifPresent(b -> b.runtime().cancel(executionId, b.target()));
         }
 
         ExecutionError cancelError = ExecutionError.nonRetryable("EXECUTION_CANCELLED", "Cancelled by caller");

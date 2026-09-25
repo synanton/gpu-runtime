@@ -35,6 +35,15 @@ gpu-gateway:
     cache-dir: ${MODEL_CACHE_DIR:/model-cache}
     registry-base-url: ${MODEL_REGISTRY_URL:http://model-registry:8080}
 
+  # Provider registry (gpu-gateway.providers.<id>) and model catalog
+  # (gpu-gateway.model-catalog) are supplied by the deployment profile
+  # (deployments/homelab: LOCAL models; deployments/external: provider models).
+  # The bundle ships none: nothing is advertised that the deployment cannot
+  # resolve (Deployment Plan §4.4).
+  providers: {}
+  model-catalog:
+    operations: {}
+
   # Configured models. Each entry maps model_id → capabilities.
   # Example:
   # models:
@@ -52,7 +61,9 @@ management:
         include: health,prometheus,info
   endpoint:
     health:
-      show-details: always
+      show-details: never   # no DB/host details on an unauthenticated port
+      probes:
+        enabled: true       # /actuator/health/readiness + /liveness (K8s probes)
   metrics:
     export:
       prometheus:

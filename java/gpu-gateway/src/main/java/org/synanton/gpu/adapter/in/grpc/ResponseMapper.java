@@ -31,6 +31,9 @@ class ResponseMapper {
         if (execution.usage() != null) {
             builder.setUsage(mapUsage(execution, execution.usage()));
         }
+        if (execution.upstreamRequestId() != null) {
+            builder.setUpstreamRequestId(execution.upstreamRequestId());
+        }
         return builder.build();
     }
 
@@ -45,6 +48,9 @@ class ResponseMapper {
         }
         if (execution.usage() != null) {
             builder.setUsage(mapUsage(execution, execution.usage()));
+        }
+        if (execution.upstreamRequestId() != null) {
+            builder.setUpstreamRequestId(execution.upstreamRequestId());
         }
         return builder.build();
     }
@@ -66,9 +72,17 @@ class ResponseMapper {
     private ErrorInfo mapError(ExecutionError error) {
         return ErrorInfo.newBuilder()
                 .setReason(mapReason(error.code()))
-                .setMessage(error.message())
+                .setCode(canonicalCode(error.code()))
+                .setMessage(error.message() == null ? "" : error.message())
                 .setRetryable(error.retryable())
                 .build();
+    }
+
+    /** Canonical fine-grained code (Deployment Plan §16): lower-case, never empty. */
+    static String canonicalCode(String domainCode) {
+        return domainCode == null || domainCode.isBlank()
+                ? "internal_error"
+                : domainCode.toLowerCase(java.util.Locale.ROOT);
     }
 
     private ErrorReason mapReason(String domainCode) {
@@ -76,6 +90,13 @@ class ResponseMapper {
             return ErrorReason.EXECUTION_FAILED;
         }
         return switch (domainCode) {
+            // GPU-7 provider codes (OpenAiProviderRuntime) — coarse category only;
+            // ErrorInfo.code carries the precise canonical code.
+            case "upstream_provider_timeout" -> ErrorReason.EXECUTION_TIMEOUT;
+            case "provider_unavailable", "circuit_open", "provider_rate_limited" ->
+                    ErrorReason.GPU_UNAVAILABLE;
+            case "capability_not_supported", "invalid_request" -> ErrorReason.INVALID_REQUEST;
+            case "model_not_found" -> ErrorReason.MODEL_NOT_FOUND;
             case "INVALID_ARGUMENT" -> ErrorReason.INVALID_REQUEST;
             case "UNAUTHENTICATED" -> ErrorReason.UNAUTHORIZED;
             case "PERMISSION_DENIED" -> ErrorReason.TENANT_NOT_ALLOWED;

@@ -1,0 +1,70 @@
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-synthesis
+  labels: { app: vllm-synthesis }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: vllm-synthesis }
+  template:
+    metadata:
+      labels: { app: vllm-synthesis }
+    spec:
+      runtimeClassName: {{ .Values.runtimeClass }}
+      nodeName: {{ .Values.placement.synthesisNode }}
+      {{- include "gpu-plane.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: vllm
+          image: {{ include "gpu-plane.image" (list . .Values.images.vllm) }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - /models
+            - --served-model-name
+            - {{ .Values.models.synthesis.servedName }}
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8000"
+            - --gpu-memory-utilization
+            - {{ .Values.models.synthesis.gpuMemoryUtilization | quote }}
+            - --max-model-len
+            - {{ .Values.models.synthesis.maxModelLen | quote }}
+            - --max-num-seqs
+            - {{ .Values.models.synthesis.maxNumSeqs | quote }}
+          env:
+            {{- include "gpu-plane.hfOffline" . | nindent 12 }}
+          ports:
+            - { containerPort: 8000 }
+          resources:
+            requests: { nvidia.com/gpu: 1, cpu: "4", memory: 16Gi }
+            limits: { nvidia.com/gpu: 1, cpu: "8", memory: 32Gi }
+          volumeMounts:
+            - { name: model, mountPath: /models, readOnly: true }
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: model
+          hostPath:
+            path: {{ .Values.models.synthesis.hostPath }}
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-synthesis
+spec:
+  selector: { app: vllm-synthesis }
+  ports:
+    - { protocol: TCP, port: 8000, targetPort: 8000 }
+  type: ClusterIP

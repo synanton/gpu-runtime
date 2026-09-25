@@ -1,5 +1,9 @@
+server:
+  port: 0   # actuator HTTP on an ephemeral port in tests
 gpu-gateway:
   grpc-port: 0
+  security:
+    mode: insecure-plaintext   # unit/integration tests; mTLS is covered by MtlsAuthorizationTest
   max-inbound-message-size-bytes: 4259840
   dispatch:
     strategy: stub

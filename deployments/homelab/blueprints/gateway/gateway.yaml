@@ -1,0 +1,180 @@
+# GPU Gateway (T-K8S-1/4) — node1, CPU-only. Sole entry point of the GPU Plane.
+# API: gRPC synanton.gpu.v1 on :9090 (Deployment Plan v3.0.0 §4). Actuator :8091
+# (health probes + Prometheus) — an ops port, not an API surface.
+#
+# Routing config (gateway-local.yaml below) is what the app actually binds:
+#   dispatch.strategy=direct       local GPU-5 path (ProviderRouter; no external fallback
+#                                  unless a request explicitly asks for OPENAI)
+#   dispatch.vllm-endpoint         Envoy — it routes by path to the three backends
+#   model-catalog (provider LOCAL) what GetModels advertises (logical IDs)
+#   models.<id>                    admission capabilities (concurrency, max input)
+#
+# Secrets (created imperatively, never committed — plan §7):
+#   gpu-postgres-cred     shared with the postgres Deployment
+#   gpu-gateway-tls       server.crt, server.key, ca.crt — self-signed PKI from
+#                         deployments/external/scripts/gen-certs.sh (doc/GPU Plane mTLS Setup.md).
+#                         Required: security.mode=mtls fails closed without it.
+#   gpu-gateway-jwt-keys  RESERVED for T-K8S-6a (execution JWT signing, pending).
+#                         Mounted optionally; nothing reads it yet. Until 6a lands
+#                         Envoy's jwt_authn rejects Gateway→Envoy calls (fail closed).
+apiVersion: v1
+kind: ConfigMap
+metadata:
+  name: gpu-gateway-config
+  namespace: gpu-plane
+data:
+  gateway-local.yaml: |
+    gpu-gateway:
+      security:                        # mTLS + tenant authorization (Plan §13; doc/GPU Plane mTLS Setup.md)
+        mode: mtls
+        tls:
+          cert-chain: /etc/gpu-gateway/tls/server.crt
+          private-key: /etc/gpu-gateway/tls/server.key
+          client-ca: /etc/gpu-gateway/tls/ca.crt
+        principals:
+          synanton-platform:           # client-certificate CN of the Platform
+            tenants: ["*"]
+            roles: [admin]
+      dispatch:
+        strategy: direct
+        vllm-endpoint: http://envoy:8080
+      model-catalog:
+        operations:
+          SYNTHESIZE:
+            default-model: synanton-qwen3-4b-synthesis
+            models:
+              "[synanton-qwen3-4b-synthesis]":
+                provider: LOCAL
+                display-name: "Qwen3-4B-Instruct-2507 (node3, vLLM)"
+                is-default: true
+                max-input-tokens: 32768
+                max-output-tokens: 8192
+          EMBED:
+            default-model: synanton-bge-base-embedding
+            models:
+              "[synanton-bge-base-embedding]":
+                provider: LOCAL
+                display-name: "BAAI/bge-base-en-v1.5 (node1, TEI)"
+                is-default: true
+                max-input-tokens: 512
+                embedding-dim: 768
+          RERANK:
+            default-model: synanton-qwen3-reranker-0.6b
+            models:
+              # the key contains a dot: Spring map binding needs bracket notation
+              "[synanton-qwen3-reranker-0.6b]":
+                provider: LOCAL
+                display-name: "Qwen3-Reranker-0.6B (node2, vLLM)"
+                is-default: true
+                max-input-tokens: 8192
+      models:
+        "[synanton-qwen3-4b-synthesis]":  { concurrency-limit: 8,  max-input-tokens: 32768, runtime-class: vllm }
+        "[synanton-bge-base-embedding]":  { concurrency-limit: 32, max-input-tokens: 512,   runtime-class: tei }
+        "[synanton-qwen3-reranker-0.6b]": { concurrency-limit: 16, max-input-tokens: 8192,  runtime-class: vllm }
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: gpu-gateway
+  namespace: gpu-plane
+  labels:
+    app: gpu-gateway
+spec:
+  replicas: 1
+  strategy:
+    type: RollingUpdate
+  selector:
+    matchLabels:
+      app: gpu-gateway
+  template:
+    metadata:
+      labels:
+        app: gpu-gateway
+      annotations:
+        prometheus.io/scrape: "true"
+        prometheus.io/port: "8091"
+        prometheus.io/path: /actuator/prometheus
+    spec:
+      nodeName: node1
+      imagePullSecrets:
+        - name: local-registry-cred
+      terminationGracePeriodSeconds: 45 # spec §31 (drain budget 30 s < this)
+      containers:
+        - name: gateway
+          image: local-registry:5000/gpu-gateway:0.1.0
+          imagePullPolicy: IfNotPresent
+          env:
+            # names the app binds in application.yml (PR #15 review P0.2/P0.3)
+            - name: GPU_GATEWAY_DB_URL
+              value: jdbc:postgresql://postgres:5432/gpu_plane
+            - name: GPU_GATEWAY_DB_USER
+              valueFrom:
+                secretKeyRef:
+                  name: gpu-postgres-cred
+                  key: POSTGRES_USER
+            - name: GPU_GATEWAY_DB_PASSWORD
+              valueFrom:
+                secretKeyRef:
+                  name: gpu-postgres-cred
+                  key: POSTGRES_PASSWORD
+            - name: SPRING_CONFIG_ADDITIONAL_LOCATION
+              value: file:/etc/gpu-gateway/config/gateway-local.yaml
+          ports:
+            - { containerPort: 9090, name: grpc }
+            - { containerPort: 8091, name: metrics }
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "4"
+              memory: 4Gi
+          volumeMounts:
+            - name: config
+              mountPath: /etc/gpu-gateway/config
+              readOnly: true
+            - name: tls
+              mountPath: /etc/gpu-gateway/tls
+              readOnly: true
+            - name: jwt-keys # reserved for T-K8S-6a
+              mountPath: /etc/gpu-gateway/keys
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /actuator/health/readiness
+              port: 8091
+            initialDelaySeconds: 15
+            periodSeconds: 5
+          livenessProbe:
+            httpGet:
+              path: /actuator/health/liveness
+              port: 8091
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 3
+      volumes:
+        - name: config
+          configMap:
+            name: gpu-gateway-config
+        - name: tls
+          secret:
+            secretName: gpu-gateway-tls
+            defaultMode: 0400
+        - name: jwt-keys
+          secret:
+            secretName: gpu-gateway-jwt-keys
+            defaultMode: 0400
+            optional: true
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-gateway
+  namespace: gpu-plane
+spec:
+  selector:
+    app: gpu-gateway
+  ports:
+    - { name: grpc, port: 9090, targetPort: 9090 }
+    - { name: metrics, port: 8091, targetPort: 8091 }
+  type: ClusterIP

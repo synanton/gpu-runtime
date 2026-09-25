@@ -1,0 +1,85 @@
+# GPU-5 homelab values. Mirrors deployments/homelab/blueprints/.
+# Freeze rule (spec §8): set every image.digest before any acceptance run;
+# when digest is set, templates render repo@digest and ignore tag.
+
+registry: local-registry:5000
+imagePullSecret: local-registry-cred
+runtimeClass: nvidia
+
+images:
+  vllm:
+    repo: vllm-openai
+    tag: v0.29.0 # CUDA 13.0 default build (plan D1)
+    digest: ""
+  tei:
+    repo: text-embeddings-inference
+    tag: turing-1.9 # sm_7.5 build for node1's GTX 1650 (plan D4)
+    digest: ""
+  envoy:
+    repo: envoy
+    tag: v1.31.0
+    digest: ""
+  postgres:
+    repo: postgres
+    tag: "16.4"
+    digest: ""
+  gateway:
+    repo: gpu-gateway
+    tag: "0.1.0"
+    digest: ""
+
+placement:
+  gatewayNode: node1 # CPU-only
+  envoyNode: node1
+  postgresNode: node1
+  embeddingNode: node1 # TEI on the GTX 1650 (one workload per GPU, plan D2)
+  rerankerNode: node2
+  synthesisNode: node3
+
+models:
+  synthesis:
+    servedName: synanton-qwen3-4b-synthesis
+    hostPath: /mnt/local-fast/models/qwen3-4b-instruct-2507
+    gpuMemoryUtilization: "0.90" # envelope, not a guarantee (plan §6, review P1.5)
+    maxModelLen: "32768"
+    maxNumSeqs: "8"
+  embedding:
+    servedName: synanton-bge-base-embedding
+    hostPath: /mnt/local-fast/models/bge-base-en-v1.5
+    dtype: float16 # Turing has no bf16
+  reranker:
+    servedName: synanton-qwen3-reranker-0.6b
+    hostPath: /mnt/local-fast/models/qwen3-reranker-0.6b # present on node2 (plan D3)
+    gpuMemoryUtilization: "0.40" # dedicated GPU; envelope, not a guarantee
+    maxModelLen: "8192"
+    # required for the official Qwen3-Reranker checkpoint (vLLM PR #19260)
+    hfOverrides: '{"architectures": ["Qwen3ForSequenceClassification"], "classifier_from_token": ["no", "yes"], "is_original_qwen3_reranker": true}'
+
+gateway:
+  strategy: direct # GPU-5 local path; unknown strategies fail startup (Plan §5.5)
+  platformPrincipal: synanton-platform # client-certificate CN of the Platform (mTLS)
+  vllmEndpoint: http://envoy:8080 # Envoy routes by path to the three backends
+  jdbcUrl: jdbc:postgresql://postgres:5432/gpu_plane
+  terminationGracePeriodSeconds: 45 # §31
+  # admission capabilities per local model (gpu-gateway.models.<id>)
+  concurrency:
+    synthesis: 8
+    embedding: 32
+    reranker: 16
+
+envoy:
+  jwksUri: http://gpu-gateway:8090/internal/.well-known/jwks.json
+  jwksCacheSeconds: 300 # §8
+  upstreamTimeoutSeconds: 300 # §31
+  jwtIssuer: synanton-gpu-gateway
+  jwtAudience: gpu-plane-execution
+
+postgres:
+  database: gpu_plane
+  storageSize: 10Gi
+  storageClass: longhorn
+
+secrets:
+  postgresCred: gpu-postgres-cred # created imperatively (plan §7), never committed
+  gatewayTls: gpu-gateway-tls # server.crt/server.key/ca.crt (doc/GPU Plane mTLS Setup.md)
+  gatewayJwtKeys: gpu-gateway-jwt-keys # reserved for T-K8S-6a (mounted optionally)

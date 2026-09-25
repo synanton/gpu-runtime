@@ -1,0 +1,69 @@
+# TEI embedding — node1 GTX 1650 (one workload per GPU, plan D2/D4).
+# See blueprints/tei/embedding.yaml header for the full rationale.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tei-embedding
+  labels: { app: tei-embedding }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: tei-embedding }
+  template:
+    metadata:
+      labels: { app: tei-embedding }
+    spec:
+      runtimeClassName: {{ .Values.runtimeClass }}
+      nodeName: {{ .Values.placement.embeddingNode }}
+      {{- include "gpu-plane.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: tei
+          image: {{ include "gpu-plane.image" (list . .Values.images.tei) }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - --model-id
+            - /models
+            - --served-model-name
+            - {{ .Values.models.embedding.servedName }}
+            - --hostname
+            - "0.0.0.0"
+            - --port
+            - "8000"
+            - --dtype
+            - {{ .Values.models.embedding.dtype | quote }}
+          env:
+            - name: HF_HUB_OFFLINE
+              value: "1"
+          ports:
+            - { containerPort: 8000 }
+          resources:
+            requests: { nvidia.com/gpu: 1, cpu: "2", memory: 4Gi }
+            limits: { nvidia.com/gpu: 1, cpu: "4", memory: 8Gi }
+          volumeMounts:
+            - { name: model, mountPath: /models, readOnly: true }
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: model
+          hostPath:
+            path: {{ .Values.models.embedding.hostPath }}
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tei-embedding
+spec:
+  selector: { app: tei-embedding }
+  ports:
+    - { protocol: TCP, port: 8000, targetPort: 8000 }
+  type: ClusterIP

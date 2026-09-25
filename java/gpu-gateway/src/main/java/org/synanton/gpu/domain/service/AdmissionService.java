@@ -42,7 +42,11 @@ public class AdmissionService {
         return capabilities;
     }
 
-    private void validateFields(ExecutionRequest request) {
+    /**
+     * Field validation (Deployment Plan §21). Public so ExecuteService can run it before
+     * routing: a malformed request is {@code invalid_request}, never a routing denial.
+     */
+    public void validateFields(ExecutionRequest request) {
         if (request.getRequestId().isBlank()) {
             throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT, "request_id is required");
         }
@@ -58,6 +62,18 @@ public class AdmissionService {
         if (request.getOperation().getNumber() == 0) {
             throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT,
                     "operation must not be OPERATION_UNSPECIFIED");
+        }
+        // Deployment Plan §21 / proto validation rules
+        requireMaxLength("request_id", request.getRequestId(), 255);
+        requireMaxLength("tenant_id", request.getTenantId(), 255);
+        requireMaxLength("model", request.getModel(), 255);
+        requireMaxLength("model_version", request.getModelVersion(), 128);
+    }
+
+    private static void requireMaxLength(String field, String value, int max) {
+        if (value.length() > max) {
+            throw new AdmissionException(AdmissionRejection.INVALID_ARGUMENT,
+                    field + " exceeds " + max + " characters");
         }
     }
 

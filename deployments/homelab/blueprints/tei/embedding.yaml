@@ -1,0 +1,97 @@
+# TEI embedding workload — node1, BAAI/bge-base-en-v1.5 (D2/D4 of gpu-5-implementation-plan.md).
+# One workload per physical GPU (PR #15 review P0.1): this pod is the ONLY
+# nvidia.com/gpu consumer on node1; Gateway/Envoy/PostgreSQL on the same node
+# are CPU-only.
+# TEI "turing" image = sm_7.5 build (GTX 1650); flash-attention auto-disabled
+# on Turing (TEI precision warning). Model weights via hostPath
+# /mnt/local-fast/models/bge-base-en-v1.5 -> /models (read-only, D6).
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: tei-embedding
+  namespace: gpu-plane
+  labels:
+    app: tei-embedding
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # single node GPU - a surge pod could never schedule anyway
+  selector:
+    matchLabels:
+      app: tei-embedding
+  template:
+    metadata:
+      labels:
+        app: tei-embedding
+    spec:
+      runtimeClassName: nvidia
+      nodeName: node1
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: tei
+          image: local-registry:5000/text-embeddings-inference:turing-1.9
+          imagePullPolicy: IfNotPresent
+          args:
+            - --model-id
+            - /models
+            - --served-model-name
+            - synanton-bge-base-embedding
+            - --hostname
+            - "0.0.0.0"
+            - --port
+            - "8000"
+            - --dtype
+            - float16 # Turing has no bf16
+          env:
+            # weights are local; never phone home to HF at startup
+            - name: HF_HUB_OFFLINE
+              value: "1"
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              nvidia.com/gpu: 1
+              cpu: "2"
+              memory: 4Gi
+            limits:
+              nvidia.com/gpu: 1
+              cpu: "4"
+              memory: 8Gi
+          volumeMounts:
+            - name: model
+              mountPath: /models
+              readOnly: true
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 60
+            periodSeconds: 10
+            failureThreshold: 10
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            initialDelaySeconds: 120
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: model
+          hostPath:
+            path: /mnt/local-fast/models/bge-base-en-v1.5
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: tei-embedding
+  namespace: gpu-plane
+spec:
+  selector:
+    app: tei-embedding
+  ports:
+    - protocol: TCP
+      port: 8000 # uniform cluster addressing (:8000 on every inference Service)
+      targetPort: 8000
+  type: ClusterIP

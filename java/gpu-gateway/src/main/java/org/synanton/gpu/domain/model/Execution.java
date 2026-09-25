@@ -23,8 +23,18 @@ public record Execution(
         Instant leasedUntil,
         ExecutionUsage usage,
         ExecutionError error,
-        byte[] result
+        byte[] result,
+        String upstreamRequestId
 ) {
+
+    /** Local/legacy constructor: no upstream (provider) request ID. */
+    public Execution(String executionId, String requestId, String requestHash, String tenantId,
+                     String modelId, ExecutionState state, String runtimeClass, Instant createdAt,
+                     Instant updatedAt, Instant expiresAt, Instant leasedUntil, ExecutionUsage usage,
+                     ExecutionError error, byte[] result) {
+        this(executionId, requestId, requestHash, tenantId, modelId, state, runtimeClass, createdAt,
+                updatedAt, expiresAt, leasedUntil, usage, error, result, null);
+    }
 
     /** Returns a copy of this execution with the given state applied.
      * Throws {@link IllegalStateException} if the transition is invalid. */
@@ -36,7 +46,7 @@ public record Execution(
         return new Execution(
                 executionId, requestId, requestHash, tenantId, modelId,
                 next, runtimeClass, createdAt, Instant.now(), expiresAt, leasedUntil,
-                usage, error, result
+                usage, error, result, upstreamRequestId
         );
     }
 

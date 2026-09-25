@@ -1,0 +1,206 @@
+# GPU-7 deployment contract (spec §26/§33/§39-§44b). Mounted into the Gateway and
+# merged over the bundled application.yml via SPRING_CONFIG_ADDITIONAL_LOCATION.
+#
+# Implementation state (PR #15 review — every key below is ENFORCED; startup fails
+# closed on inconsistency, Plan §5.5):
+#   dispatch.strategy           "external": provider routing only; unknown strategies fail
+#   routing.external-enabled    kill switch (static config; changing it needs a restart —
+#                               a runtime toggle / persisted control state is T-K8S-38)
+#   providers.<id>.*            registry: api-key, base-url, enabled, headers,
+#                               allowed-model-pattern, circuit-breaker (in-memory per
+#                               replica), health (probed every interval-seconds)
+#   sensitivity                 model tags + request data_tags → external routing denied
+#   budget                      per-tenant UTC-day limit from the cost ledger
+#   usage.cost-ledger           one PostgreSQL row per successful external execution
+#
+# The model-catalog drives provider selection (logical model → provider + provider
+# model ID). The provider model ID is rewritten into the outbound payload and the
+# logical ID restored on every downstream body, including every SSE chunk.
+
+gpu-gateway:
+  # [T-K8S-7/8] mTLS on gRPC + tenant authorization (Plan §13). Self-signed dev PKI from
+  # scripts/gen-certs.sh, mounted at /etc/gpu-gateway/tls (see gpu-7-implementation-plan.md §7).
+  # A principal is the client-certificate CN; tenant_id must be in its `tenants`.
+  security:
+    mode: mtls
+    tls:
+      cert-chain: /etc/gpu-gateway/tls/server.crt
+      private-key: /etc/gpu-gateway/tls/server.key
+      client-ca: /etc/gpu-gateway/tls/ca.crt
+    principals:
+      synanton-platform:            # the Platform (GpuExecutionClient)
+        tenants: ["*"]
+        roles: [admin]
+      gpu7-smoke:                   # scripts/smoke-test.sh, tools/gpu7-check
+        tenants: [smoke-tenant, smoke-budget-tenant]
+      synanton-benchmark:           # platform retrieval benchmark (B1-G): synquest/synflux under the
+        tenants:                    # gpu-plane profile. Explicit list, never "*": one tenant pair
+          - rb-fixed-g              # (fixed / semantic chunking) per free embedding arm.
+          - rb-semantic-g           #   synanton-free-embedding (nemotron-3-embed-1b)
+          - rb-fixed-g-vl
+          - rb-semantic-g-vl        #   synanton-free-embedding-nemotron-vl
+          - rb-fixed-g-lfm
+          - rb-semantic-g-lfm       #   synanton-free-embedding-lfm
+
+  dispatch:
+    strategy: external        # GPU-7 routing: provider adapters, never local vLLM.
+                              # [T-K8S-44/§39] mode external-only; local-only/auto invalid.
+
+  # [T-K8S-39/§32] kill switch: disabled => ALL external routing denied, fail closed.
+  routing:
+    external-enabled: true
+
+  providers:
+    openai:               # existing code schema (OpenAiRuntime)
+      api-key: ${OPENAI_API_KEY:}    # §29: env-var reference, never inline, never logged
+      base-url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}   # HTTPS only (§29)
+      enabled: ${OPENAI_PROVIDER_ENABLED:false}  # opt-in real arm: needs OPENAI_API_KEY (else denied, not advertised)
+      # Spend guard for the capped test key: startup fails if any catalog model for this
+      # provider is not an OpenRouter free model (fail closed, Plan §5.5).
+      allowed-model-pattern: ".*:free"
+      headers:                # OpenRouter attribution (https://openrouter.ai/docs/quickstart)
+        HTTP-Referer: https://synanton.ai
+        X-OpenRouter-Title: Synanton GPU Gateway
+      health:                 # [T-K8S-46] tracked independently of Gateway health
+        path: /models
+        interval-seconds: 60
+      circuit-breaker:        # [T-K8S-45]
+        failure-threshold: 5
+        reset-seconds: 60
+    mock:                     # T-K8S-51 acceptance provider (in-compose, plain HTTP
+      api-key: ${MOCK_PROVIDER_API_KEY:}  #  inside the compose network only)
+      base-url: http://mock-provider:8080/v1   # mock serves /v1/*; runtime appends /<operation path>
+      enabled: true
+      health:
+        path: /models           # relative to base-url → /v1/models (authenticated)
+        interval-seconds: 30
+      circuit-breaker:
+        failure-threshold: 5
+        reset-seconds: 30
+
+  model-catalog:
+    operations:
+      SYNTHESIZE:
+        default-model: synanton-mock-chat
+        models:
+          synanton-mock-chat:   # logical ID ≠ provider ID: proves the rewrite end-to-end
+            provider: MOCK
+            provider-model-id: mock-chat-1
+            input-usd-per-million: 1.00   # fictional mock price: exercises the ledger/budget
+            output-usd-per-million: 2.00
+            display-name: "Mock Chat (acceptance)"
+            is-default: true
+            max-input-tokens: 8192
+            max-output-tokens: 2048
+          synanton-free-chat:   # real arm (OpenRouter free model; verified 2026-09-25, cost 0)
+            provider: OPENAI
+            provider-model-id: liquid/lfm-2.5-2.6b:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
+            fallbacks:           # T-K8S-52: tried only if the primary did not accept the request
+              - provider: OPENAI    # (e.g. OpenRouter free-tier 429); must also be ':free'
+                provider-model-id: nvidia/nemotron-3-super-120b-a12b:free
+            display-name: "LFM 2.5 2.6B (OpenRouter free)"
+            max-input-tokens: 65536
+            max-output-tokens: 2048
+          synanton-mock-chat-sensitive:   # acceptance: tagged → external routing denied
+            provider: MOCK
+            provider-model-id: mock-chat-1
+            display-name: "Mock Chat (sensitive — always denied externally)"
+            tags: [sensitive]
+            input-usd-per-million: 1.00
+            output-usd-per-million: 2.00
+      EMBED:
+        default-model: synanton-mock-embedding
+        models:
+          synanton-mock-embedding:   # logical ID ≠ provider ID: proves the rewrite end-to-end
+            provider: MOCK
+            provider-model-id: mock-embedding-1
+            input-usd-per-million: 1.00   # fictional mock price: exercises the ledger/budget
+            output-usd-per-million: 2.00
+            display-name: "Mock Embedding (acceptance)"
+            is-default: true
+            max-input-tokens: 8192
+            embedding-dim: 1536
+          synanton-free-embedding:  # real arm (OpenRouter free embedding model; cost 0)
+            provider: OPENAI
+            provider-model-id: nvidia/nemotron-3-embed-1b:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
+            display-name: "Nemotron 3 Embed 1B (OpenRouter free)"
+            max-input-tokens: 8192
+            embedding-dim: 2048
+          # Benchmark arms (platform retrieval benchmark §6 Phase B1-G, G3). Native dims were
+          # measured by tools/gpu7-check/embed_probe.py (G0); the platform indexes every arm at
+          # 1024 (synquest EMBED_DIM/EMBED_TRUNCATE_DIM). max-input-tokens is advertised in
+          # GetModels, not enforced: over-long input fails upstream (upstream_provider_error).
+          synanton-free-embedding-nemotron-vl:
+            provider: OPENAI
+            provider-model-id: nvidia/llama-nemotron-embed-vl-1b-v2:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
+            display-name: "Llama Nemotron Embed VL 1B v2 (OpenRouter free)"
+            max-input-tokens: 8192
+            embedding-dim: 2048
+          synanton-free-embedding-lfm:
+            provider: OPENAI
+            provider-model-id: liquid/lfm-2.5-embedding-350m:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
+            display-name: "LFM 2.5 Embedding 350M (OpenRouter free)"
+            max-input-tokens: 512       # provider context window; chunks must fit (G6 checks)
+            embedding-dim: 1024
+          # Paid models (e.g. openai/text-embedding-3-small, the platform benchmark's
+          # opt-in arm) are rejected at startup by allowed-model-pattern while the
+          # capped test key is in use. No OpenRouter rerank model exists: RERANK on the
+          # real arm is capability_not_supported (§40).
+      RERANK:
+        default-model: synanton-mock-reranker
+        models:
+          synanton-mock-reranker:   # logical ≠ provider ID; §40: advertised because the mock supports rerank
+            provider: MOCK
+            provider-model-id: mock-reranker-1
+            input-usd-per-million: 1.00   # fictional mock price: exercises the ledger/budget
+            output-usd-per-million: 2.00
+            display-name: "Mock Reranker (acceptance)"
+            is-default: true
+            max-input-tokens: 4096
+
+      RESPOND:                # OpenAI Responses API (Plan §4.6; GPU-7 only)
+        default-model: synanton-mock-responses
+        models:
+          synanton-mock-responses:
+            provider: MOCK
+            provider-model-id: mock-chat-1
+            input-usd-per-million: 1.00
+            output-usd-per-million: 2.00
+            display-name: "Mock Responses (acceptance)"
+            is-default: true
+          synanton-free-responses:    # real arm: OpenRouter Responses API, free model (cost 0)
+            provider: OPENAI
+            provider-model-id: liquid/lfm-2.5-2.6b:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
+
+  # [T-K8S-49] sensitivity policy — ENFORCED, fail closed
+  sensitivity:
+    block-external-tags: [sensitive, pii]
+
+  # [T-K8S-48b] budget — ENFORCED from the cost ledger, fail closed
+  budget:
+    enforcement: enabled
+    default-daily-usd: 5.00
+    tenant-daily-usd:
+      smoke-budget-tenant: 0.000001   # acceptance: exhausted after one mock call
+      # Benchmark tenants use free models only (cost 0 never reaches the limit). Defence in
+      # depth: if a priced model were ever routed for them, the first call exhausts the budget.
+      rb-fixed-g: 0.000001
+      rb-semantic-g: 0.000001
+      rb-fixed-g-vl: 0.000001
+      rb-semantic-g-vl: 0.000001
+      rb-fixed-g-lfm: 0.000001
+      rb-semantic-g-lfm: 0.000001
+
+  # [T-K8S-48] cost ledger — ENFORCED (PostgreSQL cost_ledger, V2 migration)
+  usage:
+    cost-ledger: enabled

@@ -1,0 +1,74 @@
+# vLLM reranker — node2 RTX 4060 Ti (one workload per GPU, plan D2).
+# See blueprints/vllm/reranker.yaml header for the full rationale.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-reranker
+  labels: { app: vllm-reranker }
+spec:
+  replicas: 1
+  strategy: { type: Recreate }
+  selector:
+    matchLabels: { app: vllm-reranker }
+  template:
+    metadata:
+      labels: { app: vllm-reranker }
+    spec:
+      runtimeClassName: {{ .Values.runtimeClass }}
+      nodeName: {{ .Values.placement.rerankerNode }}
+      {{- include "gpu-plane.pullSecrets" . | nindent 6 }}
+      containers:
+        - name: vllm
+          image: {{ include "gpu-plane.image" (list . .Values.images.vllm) }}
+          imagePullPolicy: IfNotPresent
+          args:
+            - serve
+            - /models
+            - --runner
+            - pooling
+            - --served-model-name
+            - {{ .Values.models.reranker.servedName }}
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8000"
+            - --gpu-memory-utilization
+            - {{ .Values.models.reranker.gpuMemoryUtilization | quote }}
+            - --max-model-len
+            - {{ .Values.models.reranker.maxModelLen | quote }}
+            - --hf-overrides
+            - {{ .Values.models.reranker.hfOverrides | quote }}
+          env:
+            {{- include "gpu-plane.hfOffline" . | nindent 12 }}
+          ports:
+            - { containerPort: 8000 }
+          resources:
+            requests: { nvidia.com/gpu: 1, cpu: "2", memory: 8Gi }
+            limits: { nvidia.com/gpu: 1, cpu: "4", memory: 16Gi }
+          volumeMounts:
+            - { name: model, mountPath: /models, readOnly: true }
+          readinessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 120
+            periodSeconds: 15
+            failureThreshold: 10
+          livenessProbe:
+            httpGet: { path: /health, port: 8000 }
+            initialDelaySeconds: 180
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: model
+          hostPath:
+            path: {{ .Values.models.reranker.hostPath }}
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-reranker
+spec:
+  selector: { app: vllm-reranker }
+  ports:
+    - { protocol: TCP, port: 8000, targetPort: 8000 }
+  type: ClusterIP

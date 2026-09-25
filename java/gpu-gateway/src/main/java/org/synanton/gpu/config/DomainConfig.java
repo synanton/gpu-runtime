@@ -1,6 +1,7 @@
 package org.synanton.gpu.config;
 
 import com.fasterxml.jackson.databind.ObjectMapper;
+import org.synanton.gpu.adapter.out.runtime.ModelCatalogService;
 import org.springframework.context.annotation.Bean;
 import org.springframework.context.annotation.Configuration;
 
@@ -22,6 +23,12 @@ public class DomainConfig {
     public String vllmEndpointUrl(GpuGatewayProperties properties) {
         String endpoint = properties.getDispatch().getVllmEndpoint();
         return endpoint != null ? endpoint : "http://vllm-service:8000";
+    }
+
+    /** Provides the ModelCatalogService for model resolution. */
+    @Bean
+    public ModelCatalogService modelCatalogService(GpuGatewayProperties properties) {
+        return new ModelCatalogService(properties);
     }
 
     /** Lease window for RUNNING executions. Heartbeats must fire before this expires. */

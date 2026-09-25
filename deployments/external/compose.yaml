@@ -1,0 +1,85 @@
+# GPU-7 external-provider profile (spec §2.3/§26): Gateway + PostgreSQL + mock provider.
+# No GPU, no Envoy, no vLLM, no execution JWT. Single-node container deployment.
+#
+# API: gRPC synanton.gpu.v1 on localhost:9090 (Deployment Plan v3.0.0 §4).
+# Prereq (repo root):  ./gradlew :java:gpu-gateway:bootJar
+# Then here:           cp .env.example .env  (fill in)
+#                      ./scripts/gen-certs.sh          # self-signed dev PKI → ./certs
+#                      docker compose up -d --build && ./scripts/smoke-test.sh
+name: gpu-7-external
+
+services:
+  postgres:
+    image: postgres:16.4@sha256:e62fbf9d3e2b49816a32c400ed2dba83e3b361e6833e624024309c35d334b412
+    environment:
+      POSTGRES_USER: gpu
+      POSTGRES_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      POSTGRES_DB: gpu_plane
+    volumes:
+      - postgres-data:/var/lib/postgresql/data
+    healthcheck:
+      test: ["CMD-SHELL", "pg_isready -U gpu -d gpu_plane"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  mock-provider:
+    build: ./mock-provider
+    environment:
+      MOCK_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
+      MOCK_PORT: "8080"
+      # failure injection for circuit-breaker / error-mapping acceptance (§37)
+      MOCK_FAIL_RATE: "0"        # 0..1 fraction of requests failing with HTTP 500
+      MOCK_LATENCY_MS: "0"       # artificial upstream latency
+      MOCK_RERANK_SUPPORTED: "1" # 0 -> /v1/rerank returns 400 (§40 capability gap path)
+    ports:
+      - "127.0.0.1:18080:8080" # direct mock access for debugging; Gateway is the real API
+    healthcheck:
+      test: ["CMD", "python3", "-c", "import urllib.request;urllib.request.urlopen('http://localhost:8080/healthz')"]
+      interval: 5s
+      timeout: 3s
+      retries: 12
+    restart: unless-stopped
+
+  gateway:
+    image: gpu-gateway:0.1.0
+    build:
+      context: ../..                                   # repo root; run ./gradlew :java:gpu-gateway:bootJar first
+      dockerfile: deployments/homelab/docker/gateway.Dockerfile
+      args:
+        BASE_IMAGE: eclipse-temurin:21-jre@sha256:49e21e16e3c86eb7816a44a67549910ed090fbeb40c29c525d58bf5e02e91b0f             # public base for the single-node profile
+    depends_on:
+      postgres:
+        condition: service_healthy
+      mock-provider:
+        condition: service_healthy
+    environment:
+      # Datasource: these are the names the app actually binds (application.yml).
+      # The previous GPU_DB_* names silently fell back to localhost:5432 (PR #15 P0.2).
+      GPU_GATEWAY_DB_URL: jdbc:postgresql://postgres:5432/gpu_plane
+      GPU_GATEWAY_DB_USER: gpu
+      GPU_GATEWAY_DB_PASSWORD: ${POSTGRES_PASSWORD:?set in .env}
+      # The external deployment contract is merged over the bundled application.yml.
+      # (GPU_PROVIDER_CONFIG was never read by the app — this is the working mechanism.)
+      SPRING_CONFIG_ADDITIONAL_LOCATION: file:/etc/gpu-gateway/gateway-external.yaml
+      # Deployment mode is gpu-gateway.dispatch.strategy=external in the mounted config
+      # (unknown strategies fail startup, Plan §5.5). No API-key pepper: API keys are not
+      # part of the contract (Plan v3.0.0 §13).
+      # provider credentials arrive as env vars referenced from config (§29)
+      MOCK_PROVIDER_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-} # optional real provider arm
+      OPENAI_PROVIDER_ENABLED: ${OPENAI_PROVIDER_ENABLED:-false}
+    volumes:
+      - ./config/gateway-external.yaml:/etc/gpu-gateway/gateway-external.yaml:ro
+      # self-signed dev PKI: ./scripts/gen-certs.sh (git-ignored; required — mTLS fails closed)
+      - ./certs:/etc/gpu-gateway/tls:ro
+    ports:
+      # gRPC synanton.gpu.v1 over mTLS (Plan §13.1). Bound to localhost as defence in
+      # depth; to serve remote platform hosts, publish on an interface of your choice.
+      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:8091:8091" # actuator health/metrics
+    restart: unless-stopped
+
+volumes:
+  postgres-data:

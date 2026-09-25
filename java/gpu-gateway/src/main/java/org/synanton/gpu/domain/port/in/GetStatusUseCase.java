@@ -20,4 +20,7 @@ public interface GetStatusUseCase {
      * @return the execution record, or empty if not found
      */
     Optional<Execution> getStatus(String executionId);
+
+    /** Owning tenant of an execution, without reconciliation side effects (authorization). */
+    Optional<String> tenantOf(String executionId);
 }

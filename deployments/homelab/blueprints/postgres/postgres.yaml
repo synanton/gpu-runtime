@@ -1,0 +1,87 @@
+# PostgreSQL 16 for Gateway control-plane state (spec §36) — node1, CPU-only.
+# Credentials come from Secret gpu-postgres-cred (created imperatively, never committed —
+# see gpu-5-implementation-plan.md §7 phase 2).
+# Storage: Longhorn (default StorageClass) — control-plane state, not model weights.
+apiVersion: v1
+kind: PersistentVolumeClaim
+metadata:
+  name: postgres-data
+  namespace: gpu-plane
+spec:
+  accessModes: [ReadWriteOnce]
+  storageClassName: longhorn
+  resources:
+    requests:
+      storage: 10Gi
+---
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: postgres
+  namespace: gpu-plane
+  labels:
+    app: postgres
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate # RWO volume cannot attach to two pods at once
+  selector:
+    matchLabels:
+      app: postgres
+  template:
+    metadata:
+      labels:
+        app: postgres
+    spec:
+      nodeName: node1
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: postgres
+          image: local-registry:5000/postgres:16.4
+          imagePullPolicy: IfNotPresent
+          envFrom:
+            - secretRef:
+                name: gpu-postgres-cred
+          ports:
+            - containerPort: 5432
+          resources:
+            requests:
+              cpu: "1"
+              memory: 1Gi
+            limits:
+              cpu: "2"
+              memory: 4Gi
+          volumeMounts:
+            - name: data
+              mountPath: /var/lib/postgresql/data
+              subPath: pgdata # avoids lost+found ownership issue on fresh volumes
+          readinessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+            initialDelaySeconds: 10
+            periodSeconds: 5
+          livenessProbe:
+            exec:
+              command: ["pg_isready", "-U", "$(POSTGRES_USER)", "-d", "$(POSTGRES_DB)"]
+            initialDelaySeconds: 30
+            periodSeconds: 15
+            failureThreshold: 5
+      volumes:
+        - name: data
+          persistentVolumeClaim:
+            claimName: postgres-data
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: postgres
+  namespace: gpu-plane
+spec:
+  selector:
+    app: postgres
+  ports:
+    - protocol: TCP
+      port: 5432
+      targetPort: 5432
+  type: ClusterIP

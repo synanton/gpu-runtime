@@ -1,0 +1,103 @@
+# NetworkPolicy (spec §19, T-K8S-11) — default-deny base, then exactly the §19 flows.
+# Direct client access to Envoy/vLLM/PostgreSQL is denied by the base policy.
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: default-deny
+spec:
+  podSelector: {}
+  policyTypes: [Ingress, Egress]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: allow-dns
+spec:
+  podSelector: {}
+  policyTypes: [Egress]
+  egress:
+    - to:
+        - namespaceSelector:
+            matchLabels: { kubernetes.io/metadata.name: kube-system }
+      ports:
+        - { protocol: UDP, port: 53 }
+        - { protocol: TCP, port: 53 }
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: gateway
+spec:
+  podSelector:
+    matchLabels: { app: gpu-gateway }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - ports: [{ protocol: TCP, port: 9090 }] # gRPC synanton.gpu.v1 from the Platform (Plan v3.0.0 §4)
+    - from:
+        - podSelector:
+            matchLabels: { app: envoy }
+      ports: [{ protocol: TCP, port: 8090 }] # JWKS from Envoy only — reserved for T-K8S-6a (not served yet)
+    - ports: [{ protocol: TCP, port: 8091 }] # metrics scrape
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: envoy }
+      ports: [{ protocol: TCP, port: 8080 }]
+    - to:
+        - podSelector:
+            matchLabels: { app: postgres }
+      ports: [{ protocol: TCP, port: 5432 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: envoy
+spec:
+  podSelector:
+    matchLabels: { app: envoy }
+  policyTypes: [Ingress, Egress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: gpu-gateway }
+      ports: [{ protocol: TCP, port: 8080 }]
+  egress:
+    - to:
+        - podSelector:
+            matchLabels: { app: gpu-gateway }
+      ports: [{ protocol: TCP, port: 8090 }]
+    - to:
+        - podSelector:
+            matchExpressions:
+              - { key: app, operator: In, values: [vllm-synthesis, vllm-reranker, tei-embedding] }
+      ports: [{ protocol: TCP, port: 8000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: inference
+spec:
+  podSelector:
+    matchExpressions:
+      - { key: app, operator: In, values: [vllm-synthesis, vllm-reranker, tei-embedding] }
+  policyTypes: [Ingress]
+  ingress:
+    # §6: inference backends accept traffic from Envoy only
+    - from:
+        - podSelector:
+            matchLabels: { app: envoy }
+      ports: [{ protocol: TCP, port: 8000 }]
+---
+apiVersion: networking.k8s.io/v1
+kind: NetworkPolicy
+metadata:
+  name: postgres
+spec:
+  podSelector:
+    matchLabels: { app: postgres }
+  policyTypes: [Ingress]
+  ingress:
+    - from:
+        - podSelector:
+            matchLabels: { app: gpu-gateway }
+      ports: [{ protocol: TCP, port: 5432 }]
