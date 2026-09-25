@@ -58,6 +58,8 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
     private final ObjectMapper objectMapper;
     private final CircuitBreaker circuitBreaker;
     private final HttpClient httpClient;
+    /** Optional per-tenant session header, e.g. {@code x-opencode-session} (provider context caching). */
+    private final String sessionHeader;
 
     public OpenAiProviderRuntime(String providerId,
                                  String baseUrl,
@@ -66,6 +68,18 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
                                  Duration requestTimeout,
                                  CircuitBreaker circuitBreaker,
                                  ObjectMapper objectMapper) {
+        this(providerId, baseUrl, apiKey, extraHeaders, requestTimeout, circuitBreaker, objectMapper, null);
+    }
+
+    public OpenAiProviderRuntime(String providerId,
+                                 String baseUrl,
+                                 String apiKey,
+                                 Map<String, String> extraHeaders,
+                                 Duration requestTimeout,
+                                 CircuitBreaker circuitBreaker,
+                                 ObjectMapper objectMapper,
+                                 String sessionHeader) {
+        this.sessionHeader = sessionHeader == null || sessionHeader.isBlank() ? null : sessionHeader;
         this.providerId = providerId;
         this.baseUrl = baseUrl;
         this.apiKey = apiKey;
@@ -250,10 +264,28 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             builder.header("Authorization", "Bearer " + apiKey);
         }
         extraHeaders.forEach(builder::header);
+        if (sessionHeader != null) {
+            builder.header(sessionHeader, sessionId(providerId, request.getTenantId()));
+        }
         if (streaming) {
             builder.header("Accept", "text/event-stream");
         }
         return builder.build();
+    }
+
+    /**
+     * Stable, opaque session ID per (provider, tenant). One tenant's calls reuse one session,
+     * so the provider can cache context. The tenant ID itself is never sent, only a SHA-256
+     * prefix, and different providers see unrelated IDs.
+     */
+    static String sessionId(String providerId, String tenantId) {
+        try {
+            byte[] digest = java.security.MessageDigest.getInstance("SHA-256").digest(
+                    (providerId + ":" + (tenantId == null ? "" : tenantId)).getBytes(java.nio.charset.StandardCharsets.UTF_8));
+            return "synanton-" + java.util.HexFormat.of().formatHex(digest, 0, 12);
+        } catch (java.security.NoSuchAlgorithmException e) {
+            throw new IllegalStateException(e);
+        }
     }
 
     private String resolveEndpoint(String targetEndpoint, Operation operation) {

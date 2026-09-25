@@ -54,6 +54,13 @@ services:
         condition: service_healthy
       mock-provider:
         condition: service_healthy
+    # External-provider settings (keys, enable flags, model IDs, prices, budgets: see
+    # .env.example) come from .env. Only variables actually set there reach the container, so
+    # the defaults in config/gateway-external.yaml apply to the rest. An explicit empty
+    # `environment:` entry would override those defaults with "".
+    env_file:
+      - path: .env
+        required: false
     environment:
       # Datasource: these are the names the app actually binds (application.yml).
       # The previous GPU_DB_* names silently fell back to localhost:5432 (PR #15 P0.2).
@@ -68,8 +75,9 @@ services:
       # part of the contract (Plan v3.0.0 §13).
       # provider credentials arrive as env vars referenced from config (§29)
       MOCK_PROVIDER_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
-      OPENAI_API_KEY: ${OPENAI_API_KEY:-} # optional real provider arm
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-} # optional real provider arm (OpenRouter)
       OPENAI_PROVIDER_ENABLED: ${OPENAI_PROVIDER_ENABLED:-false}
+      OPENCODE_PROVIDER_ENABLED: ${OPENCODE_PROVIDER_ENABLED:-false} # optional real arm (opencode.ai)
     volumes:
       - ./config/gateway-external.yaml:/etc/gpu-gateway/gateway-external.yaml:ro
       # self-signed dev PKI: ./scripts/gen-certs.sh (git-ignored; required — mTLS fails closed)

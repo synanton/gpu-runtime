@@ -198,7 +198,7 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 ├── scripts/verify-gpu-contract-mirror.sh  # proto mirror check vs platform (in ./gradlew check)
 ├── tools/
 │   ├── gpu-grpc-call.sh                   # grpcurl wrapper (mTLS) for both gRPC services
-│   ├── gpu7-check/                        # live GPU-7 validation, OpenRouter free models only (uv venv)
+│   ├── gpu7-check/                        # live GPU-7 validation: opencode.ai (paid, cheap) or OpenRouter (free) arm (uv venv)
 │   ├── gpu7-package-check.py              # §46 packaging checklist (T-K8S-53)
 │   └── pin-image-digests.sh               # §8 digest pinning
 └── README.md · LICENSE
@@ -228,7 +228,7 @@ mTLS setup with self-signed certificates: [`doc/GPU Plane mTLS Setup.md`](doc/GP
 | --- | --- | --- |
 | **Deployment contract** | Defined | Defined (v3.1.0) |
 | **Implementation** | One workload per GPU (node1 TEI embedding, node2 vLLM reranker, node3 vLLM synthesis); Gateway routing ConfigMap; mTLS; streaming. **Missing:** execution-JWT signing/JWKS (T-K8S-6a) | **Complete:** mTLS + tenant authorization, provider registry, logical→provider rewrite, streaming, **Responses API**, canonical errors, circuit breaker, health, cost ledger, budget, sensitivity, kill switch (config + persisted runtime `GPUControlService`), multi-provider failover, upstream request IDs, zero-prompt logging verified, digest-pinned packaging |
-| **Acceptance** | **Blocked:** Envoy rejects Gateway→backend calls until T-K8S-6a (fail closed); no PoC run yet. Phases 0–4 + per-service smoke executable | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md) 20/20 (OpenRouter free models, zero spend); §46 checklist `tools/gpu7-package-check.py --live` 16/16. Freeze attestation (§49) awaits reviewer sign-off |
+| **Acceptance** | **Blocked:** Envoy rejects Gateway→backend calls until T-K8S-6a (fail closed); no PoC run yet. Phases 0–4 + per-service smoke executable | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md): opencode.ai arm 15/15 (current; cheap paid models, estimated spend $0.000063), OpenRouter free arm 20/20 (last run before OpenRouter became unreachable from this network); §46 checklist `tools/gpu7-package-check.py --live` 16/16. Freeze attestation (§49) awaits reviewer sign-off |
 
 GPU-5 model state: Qwen3 weights verified; `bge-base-en-v1.5` complete on all nodes
 (mirrored); `bge-small-en-v1.5` fallback complete on all nodes. Manual downloads use a `uv` venv +

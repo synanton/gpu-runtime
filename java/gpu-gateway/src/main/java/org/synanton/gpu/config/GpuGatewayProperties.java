@@ -61,6 +61,12 @@ public class GpuGatewayProperties {
         private String allowedModelPattern;
         /** Extra request headers sent to this provider (e.g. OpenRouter attribution). */
         private Map<String, String> headers = new HashMap<>();
+        /**
+         * Optional request header carrying a stable per-tenant session ID (a SHA-256 prefix,
+         * never the tenant ID). Example: {@code x-opencode-session} for opencode.ai context
+         * caching.
+         */
+        private String sessionHeader;
         private Health health = new Health();
         private CircuitBreaker circuitBreaker = new CircuitBreaker();
 
@@ -70,6 +76,8 @@ public class GpuGatewayProperties {
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public String getAllowedModelPattern() { return allowedModelPattern; }
         public void setAllowedModelPattern(String allowedModelPattern) { this.allowedModelPattern = allowedModelPattern; }
+        public String getSessionHeader() { return sessionHeader; }
+        public void setSessionHeader(String sessionHeader) { this.sessionHeader = sessionHeader; }
         public Map<String, String> getHeaders() { return headers; }
         public void setHeaders(Map<String, String> headers) { this.headers = headers; }
         public boolean isEnabled() { return enabled; }

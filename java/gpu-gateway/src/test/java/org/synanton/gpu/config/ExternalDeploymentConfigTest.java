@@ -37,9 +37,10 @@ class ExternalDeploymentConfigTest {
     void load() throws Exception {
         assertThat(Files.isReadable(CONFIG)).as(CONFIG.toAbsolutePath().toString()).isTrue();
         StandardEnvironment env = new StandardEnvironment();
-        // simulate compose: the opt-in real arm enabled with a (fake) key, and the mock key
+        // simulate compose: both opt-in real arms enabled with (fake) keys, and the mock key
         env.getPropertySources().addFirst(new MapPropertySource("test-env",
                 Map.of("OPENAI_PROVIDER_ENABLED", "true", "OPENAI_API_KEY", "sk-test-not-a-key",
+                        "OPENCODE_PROVIDER_ENABLED", "true", "OPENCODE_API_KEY", "oc-test-not-a-key",
                         "MOCK_PROVIDER_API_KEY", "mock-test-key")));
         new YamlPropertySourceLoader().load("gateway-external", new FileSystemResource(CONFIG))
                 .forEach(env.getPropertySources()::addLast);
@@ -71,6 +72,30 @@ class ExternalDeploymentConfigTest {
         assertThat(embed.get("synanton-free-embedding-nemotron-vl").getEmbeddingDim()).isEqualTo(2048);
         assertThat(embed.get("synanton-free-embedding-lfm").getEmbeddingDim()).isEqualTo(1024);
         assertThat(embed.get("synanton-free-embedding-lfm").getMaxInputTokens()).isEqualTo(512);
+    }
+
+    @Test
+    void opencodeArmIsPricedCheapAllowlistedAndHasNoEmbeddings() {
+        var provider = p.getProviders().get("opencode");
+        assertThat(provider.getBaseUrl()).isEqualTo("https://opencode.ai/zen/v1");
+        assertThat(provider.getHeaders()).containsEntry("User-Agent", "synanton/1.0 (Synthesis & Semantics App)");
+        assertThat(provider.getSessionHeader()).isEqualTo("x-opencode-session");
+        var ops = p.getModelCatalog().getOperations();
+        var chat = ops.get("SYNTHESIZE").getModels().get("synanton-external-chat");
+        var responses = ops.get("RESPOND").getModels().get("synanton-external-responses");
+        assertThat(chat.getProviderModelId()).isEqualTo("qwen3.8-flash");
+        assertThat(chat.getFallbacks()).extracting(f -> f.getProviderModelId()).containsExactly("glm-5.3-flash");
+        assertThat(responses.getProviderModelId()).isEqualTo("gpt-6-luna");
+        // paid arm: priced (the budget/cost ledger needs it) and cheap (≤ $1 / M tokens)
+        for (var m : List.of(chat, responses)) {
+            assertThat(m.getInputUsdPerMillion()).isPositive().isLessThanOrEqualTo(BigDecimal.ONE);
+            assertThat(m.getOutputUsdPerMillion()).isPositive().isLessThanOrEqualTo(BigDecimal.ONE);
+        }
+        // opencode.ai serves no /embeddings or /rerank
+        for (String op : List.of("EMBED", "RERANK")) {
+            assertThat(ops.get(op).getModels().values()).noneMatch(m -> "OPENCODE".equalsIgnoreCase(m.getProvider()));
+        }
+        assertThat(p.getBudget().getTenantDailyUsd().get("smoke-tenant")).isLessThanOrEqualTo(new BigDecimal("0.05"));
     }
 
     @Test
