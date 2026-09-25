@@ -26,7 +26,7 @@ images:
   gateway:
     repo: gpu-gateway
     tag: "0.1.0"
-    digest: ""
+    digest: "sha256:8a747eb2c2d77bb7a39d3cb4400746183939d5899829c410c69a67c668e8ef13" # T-K8S-6a build; update after every build-and-push.sh (tag is reused)
 
 placement:
   gatewayNode: node1 # CPU-only
@@ -58,7 +58,19 @@ models:
 gateway:
   strategy: direct # GPU-5 local path; unknown strategies fail startup (Plan §5.5)
   platformPrincipal: synanton-platform # client-certificate CN of the Platform (mTLS)
+  # Least-privilege principals: explicit tenants, never "*", no admin role.
+  # Certificates come from scripts/issue-client-cert.sh <cn> (existing CA).
+  extraPrincipals:
+    synanton-benchmark: # retrieval benchmark (platform plan §6 Phase B1-K)
+      tenants: [rb-fixed-g5, rb-semantic-g5, rb-dryrun-g5, rb-hier-g5, rb-graph-g5]
   vllmEndpoint: http://envoy:8080 # Envoy routes by path to the three backends
+  jwksPort: 8090 # execution-JWT JWKS listener (T-K8S-6a); must match envoy.jwksUri
+  # External gRPC via NodePort (benchmark plan B1-K). mTLS still applies; clients set the TLS
+  # authority to gpu-gateway. allowedCidrs feeds the gateway NetworkPolicy's :9090 ingress.
+  external:
+    enabled: true
+    nodePort: 30990
+    allowedCidrs: ["192.168.10.37/32"]
   jdbcUrl: jdbc:postgresql://postgres:5432/gpu_plane
   terminationGracePeriodSeconds: 45 # §31
   # admission capabilities per local model (gpu-gateway.models.<id>)
@@ -82,4 +94,4 @@ postgres:
 secrets:
   postgresCred: gpu-postgres-cred # created imperatively (plan §7), never committed
   gatewayTls: gpu-gateway-tls # server.crt/server.key/ca.crt (doc/GPU Plane mTLS Setup.md)
-  gatewayJwtKeys: gpu-gateway-jwt-keys # reserved for T-K8S-6a (mounted optionally)
+  gatewayJwtKeys: gpu-gateway-jwt-keys # REQUIRED: current.key + current.pub + previous.pub (plan §7, T-K8S-6a)

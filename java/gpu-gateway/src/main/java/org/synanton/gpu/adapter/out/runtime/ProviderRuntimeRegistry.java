@@ -73,6 +73,6 @@ public class ProviderRuntimeRegistry {
                 config.getApiKey() == null || config.getApiKey().isBlank() ? "absent" : "present");
         return new OpenAiProviderRuntime(
                 providerId, config.getBaseUrl(), config.getApiKey(), extraHeaders,
-                dispatchTimeout, breaker, objectMapper);
+                dispatchTimeout, breaker, objectMapper, config.getSessionHeader());
     }
 }

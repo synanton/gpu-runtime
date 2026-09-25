@@ -13,6 +13,7 @@
 | --- | --- |
 | **Deployment contract** | **Defined** — Deployment Plan **v3.1.0**; transport = gRPC `synanton.gpu.v1` over mTLS (§4, §13) |
 | **Implementation** | **Complete for the contract** (table below). Only the §49 freeze attestation (a reviewer sign-off) is outstanding |
+| **Real external arms** | Switchable in `.env`: **opencode.ai** (`providers.opencode`, current: cheap paid models, no embeddings; live `gpu7-check` 15/15, estimated spend $0.000063 = cost ledger) and **OpenRouter** (`providers.openai`, free models incl. EMBED; unreachable from this network since 2026-09-25, Cloudflare 403) — see §3a |
 | **Acceptance (§37, T-K8S-51)** | **Passing** — `ExternalAcceptanceTest` (31 cases: real gRPC, PostgreSQL, fake providers); packaged `scripts/smoke-test.sh` (27 mock / 32 with the live arm); live `tools/gpu7-check` (20, OpenRouter free models incl. all three embedding arms and the `synanton-benchmark` principal, zero spend); `tools/gpu7-package-check.py --live` §46 checklist 16/16 |
 
 | Capability | Ticket / spec | Where |
@@ -133,9 +134,30 @@ Smoke test at any point after phase 2 (requires `grpcurl`):
 
 Executable forms: unit/component tests in `java/gpu-gateway` and `scripts/smoke-test.sh` against the packaged compose stack (both over the gRPC contract).
 
+## 3a. Real external provider arms (switchable)
+
+| | OpenRouter | opencode.ai |
+|---|---|---|
+| Provider id | `openai` | `opencode` |
+| Base URL | `https://openrouter.ai/api/v1` | `https://opencode.ai/zen/v1` |
+| Switch / key | `OPENAI_PROVIDER_ENABLED`, `OPENAI_API_KEY` | `OPENCODE_PROVIDER_ENABLED`, `OPENCODE_API_KEY` |
+| Logical models | `synanton-free-chat`, `synanton-free-responses`, `synanton-free-embedding[-nemotron-vl\|-lfm]` | `synanton-external-chat`, `synanton-external-responses` |
+| Provider models (`.env`) | `OPENROUTER_*_MODEL` (free) | `OPENCODE_CHAT_MODEL=qwen3.8-flash`, `OPENCODE_CHAT_FALLBACK_MODEL=glm-5.3-flash`, `OPENCODE_RESPONSES_MODEL=gpt-6-luna` |
+| Spend guard | `allowed-model-pattern: ".*:free"` | allowlist `OPENCODE_ALLOWED_MODEL_PATTERN` + catalog prices (`OPENCODE_*_USD_PER_M`) → cost ledger + budget (`GPU7_SMOKE_DAILY_USD`) |
+| Operations | chat, streaming, Responses, EMBED | chat, streaming, Responses. **No** `/embeddings` or `/rerank` (404) |
+| Headers | OpenRouter attribution | `User-Agent: synanton/1.0 (Synthesis & Semantics App)` (opencode.ai blocklists default UAs) and `x-opencode-session`, a stable per-tenant SHA-256 prefix for context caching (`providers.<id>.session-header`) |
+
+Selection rationale (opencode.ai, probed 2026-09-25):
+- **Free tier:** `*-free` and `big-pickle` are refused outside the OpenCode app (403 `FreeTierError`); the gateway doesn't impersonate the OpenCode client.
+- **Chat:** `qwen3.8-flash` is the cheapest paid model that served chat completions. `jev-1.13` (cheaper) returned 503, and `glm-5.3-flash` is the fallback. The catalog price is the max of the two, so the ledger never under-counts a failed-over call.
+- **Responses:** `gpt-6-luna` ($0.10/$0.50) is served only on `/responses`.
+
+`GPU7_EXTERNAL_PROVIDER` selects the arm `tools/gpu7-check` validates. The retrieval benchmark's
+EMBED arms need OpenRouter (or GPU-5); opencode.ai can't serve them.
+
 ## 6. Secrets and mTLS
 
-`.env` (git-ignored) holds `POSTGRES_PASSWORD`, `MOCK_PROVIDER_API_KEY` and any real provider key (`OPENAI_API_KEY` + `OPENAI_PROVIDER_ENABLED=true`). Provider credentials flow into config only as `${ENV_VAR}` references (§29), never inline, never logged. Real-provider traffic is HTTPS-only; the mock is plain HTTP inside the compose network.
+`.env` (git-ignored; template `.env.example`) holds `POSTGRES_PASSWORD`, `MOCK_PROVIDER_API_KEY`, and the real provider keys and switches (`OPENAI_*` for OpenRouter, `OPENCODE_*` for opencode.ai, model IDs, prices, budgets). The gateway reads it via compose `env_file`. Provider credentials flow into config only as `${ENV_VAR}` references (§29), never inline, never logged. Real-provider traffic is HTTPS-only; the mock is plain HTTP inside the compose network.
 
 The Gateway's gRPC port is **mTLS-only**. Generate the self-signed dev PKI before `docker compose up`:
 

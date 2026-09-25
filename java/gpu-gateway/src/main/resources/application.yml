@@ -21,6 +21,16 @@ gpu-gateway:
   grpc-port: ${GPU_GATEWAY_GRPC_PORT:9090}
   max-inbound-message-size-bytes: ${GPU_GATEWAY_MAX_MSG_BYTES:4259840}  # 4 MB + 64 KB overhead
 
+  # GPU-5 execution JWT (Deployment Plan §12, T-K8S-6a): off by default; enabled in
+  # deployments/homelab (gateway-local.yaml) where Envoy's jwt_authn requires it.
+  execution-jwt:
+    enabled: ${GPU_GATEWAY_EXECUTION_JWT_ENABLED:false}
+    key-dir: /etc/gpu-gateway/keys       # file-mounted Secret; never via env (§12)
+    issuer: synanton-gpu-gateway
+    audience: gpu-plane-execution
+    ttl-seconds: 60
+    jwks-port: 8090
+
   dispatch:
     strategy: ${GPU_GATEWAY_DISPATCH_STRATEGY:stub}
     vllm-endpoint: ${VLLM_ENDPOINT:http://vllm-service:8000}
@@ -64,6 +74,10 @@ management:
       show-details: never   # no DB/host details on an unauthenticated port
       probes:
         enabled: true       # /actuator/health/readiness + /liveness (K8s probes)
+      group:
+        readiness:
+          # executionJwt: keys loaded + JWKS listening, so Gateway readiness precedes Envoy (§12)
+          include: readinessState,executionJwt
   metrics:
     export:
       prometheus:

@@ -50,8 +50,13 @@ gpu-gateway:
   routing:
     external-enabled: true
 
+  # External provider arms. Each is switched on/off and keyed from deployments/external/.env
+  # (never inline), and every real-arm model ID is overridable there too:
+  #   openai   = OpenRouter (free models only): OPENAI_PROVIDER_ENABLED, OPENAI_API_KEY, OPENROUTER_*_MODEL
+  #   opencode = opencode.ai Zen (cheap paid models): OPENCODE_PROVIDER_ENABLED, OPENCODE_API_KEY, OPENCODE_*_MODEL
+  # tools/gpu7-check validates the arm named by GPU7_EXTERNAL_PROVIDER.
   providers:
-    openai:               # existing code schema (OpenAiRuntime)
+    openai:               # OpenRouter; existing code schema (OpenAiRuntime)
       api-key: ${OPENAI_API_KEY:}    # §29: env-var reference, never inline, never logged
       base-url: ${OPENAI_BASE_URL:https://openrouter.ai/api/v1}   # HTTPS only (§29)
       enabled: ${OPENAI_PROVIDER_ENABLED:false}  # opt-in real arm: needs OPENAI_API_KEY (else denied, not advertised)
@@ -65,6 +70,27 @@ gpu-gateway:
         path: /models
         interval-seconds: 60
       circuit-breaker:        # [T-K8S-45]
+        failure-threshold: 5
+        reset-seconds: 60
+    opencode:             # opencode.ai Zen: OpenAI-compatible chat completions + Responses API.
+      # No /embeddings or /rerank endpoints (HTTP 404, verified 2026-09-25): EMBED/RERANK stay
+      # on OpenRouter or the mock. Its free tier (*-free, big-pickle) is refused outside the
+      # OpenCode app (403 FreeTierError), so this arm uses the cheapest paid models.
+      api-key: ${OPENCODE_API_KEY:}
+      base-url: ${OPENCODE_BASE_URL:https://opencode.ai/zen/v1}
+      enabled: ${OPENCODE_PROVIDER_ENABLED:false}
+      # Spend guard: startup fails unless every catalog model of this provider is in the
+      # cheap-model allowlist (regex; override in .env when changing models).
+      allowed-model-pattern: ${OPENCODE_ALLOWED_MODEL_PATTERN:qwen3.8-flash|glm-5.3-flash|gpt-6-luna|jev-1.13|.*-free}
+      headers:
+        # opencode.ai blocklists default library user agents
+        User-Agent: ${OPENCODE_USER_AGENT:synanton/1.0 (Synthesis & Semantics App)}
+      # Stable opaque session per tenant (SHA-256 prefix, never the tenant ID): context caching
+      session-header: x-opencode-session
+      health:
+        path: /models
+        interval-seconds: 60
+      circuit-breaker:
         failure-threshold: 5
         reset-seconds: 60
     mock:                     # T-K8S-51 acceptance provider (in-compose, plain HTTP
@@ -94,13 +120,27 @@ gpu-gateway:
             max-output-tokens: 2048
           synanton-free-chat:   # real arm (OpenRouter free model; verified 2026-09-25, cost 0)
             provider: OPENAI
-            provider-model-id: liquid/lfm-2.5-2.6b:free
+            provider-model-id: ${OPENROUTER_CHAT_MODEL:liquid/lfm-2.5-2.6b:free}
             input-usd-per-million: 0
             output-usd-per-million: 0
             fallbacks:           # T-K8S-52: tried only if the primary did not accept the request
               - provider: OPENAI    # (e.g. OpenRouter free-tier 429); must also be ':free'
-                provider-model-id: nvidia/nemotron-3-super-120b-a12b:free
+                provider-model-id: ${OPENROUTER_CHAT_FALLBACK_MODEL:nvidia/nemotron-3-super-120b-a12b:free}
             display-name: "LFM 2.5 2.6B (OpenRouter free)"
+            max-input-tokens: 65536
+            max-output-tokens: 2048
+          synanton-external-chat:   # real arm on opencode.ai (cheapest working paid model, 2026-09-25)
+            provider: OPENCODE
+            provider-model-id: ${OPENCODE_CHAT_MODEL:qwen3.8-flash}
+            # Price used by the cost ledger / budget: the max of primary and fallback
+            # (qwen3.8-flash $0.15/$0.47, glm-5.3-flash $0.15/$0.50 per million), so the
+            # ledger never under-counts a failed-over call.
+            input-usd-per-million: ${OPENCODE_CHAT_INPUT_USD_PER_M:0.15}
+            output-usd-per-million: ${OPENCODE_CHAT_OUTPUT_USD_PER_M:0.50}
+            fallbacks:           # tried only when the primary did not accept (e.g. 503 "Endpoint is unavailable")
+              - provider: OPENCODE
+                provider-model-id: ${OPENCODE_CHAT_FALLBACK_MODEL:glm-5.3-flash}
+            display-name: "External chat (opencode.ai)"
             max-input-tokens: 65536
             max-output-tokens: 2048
           synanton-mock-chat-sensitive:   # acceptance: tagged → external routing denied
@@ -124,7 +164,7 @@ gpu-gateway:
             embedding-dim: 1536
           synanton-free-embedding:  # real arm (OpenRouter free embedding model; cost 0)
             provider: OPENAI
-            provider-model-id: nvidia/nemotron-3-embed-1b:free
+            provider-model-id: ${OPENROUTER_EMBED_MODEL:nvidia/nemotron-3-embed-1b:free}
             input-usd-per-million: 0
             output-usd-per-million: 0
             display-name: "Nemotron 3 Embed 1B (OpenRouter free)"
@@ -136,7 +176,7 @@ gpu-gateway:
           # GetModels, not enforced: over-long input fails upstream (upstream_provider_error).
           synanton-free-embedding-nemotron-vl:
             provider: OPENAI
-            provider-model-id: nvidia/llama-nemotron-embed-vl-1b-v2:free
+            provider-model-id: ${OPENROUTER_EMBED_VL_MODEL:nvidia/llama-nemotron-embed-vl-1b-v2:free}
             input-usd-per-million: 0
             output-usd-per-million: 0
             display-name: "Llama Nemotron Embed VL 1B v2 (OpenRouter free)"
@@ -144,7 +184,7 @@ gpu-gateway:
             embedding-dim: 2048
           synanton-free-embedding-lfm:
             provider: OPENAI
-            provider-model-id: liquid/lfm-2.5-embedding-350m:free
+            provider-model-id: ${OPENROUTER_EMBED_LFM_MODEL:liquid/lfm-2.5-embedding-350m:free}
             input-usd-per-million: 0
             output-usd-per-million: 0
             display-name: "LFM 2.5 Embedding 350M (OpenRouter free)"
@@ -178,9 +218,14 @@ gpu-gateway:
             is-default: true
           synanton-free-responses:    # real arm: OpenRouter Responses API, free model (cost 0)
             provider: OPENAI
-            provider-model-id: liquid/lfm-2.5-2.6b:free
+            provider-model-id: ${OPENROUTER_RESPONSES_MODEL:liquid/lfm-2.5-2.6b:free}
             input-usd-per-million: 0
             output-usd-per-million: 0
+          synanton-external-responses:   # real arm: opencode.ai Responses API (gpt-6-luna is served
+            provider: OPENCODE            # only on /responses; chat completions returns 503)
+            provider-model-id: ${OPENCODE_RESPONSES_MODEL:gpt-6-luna}
+            input-usd-per-million: ${OPENCODE_RESPONSES_INPUT_USD_PER_M:0.10}
+            output-usd-per-million: ${OPENCODE_RESPONSES_OUTPUT_USD_PER_M:0.50}
 
   # [T-K8S-49] sensitivity policy — ENFORCED, fail closed
   sensitivity:
@@ -189,9 +234,12 @@ gpu-gateway:
   # [T-K8S-48b] budget — ENFORCED from the cost ledger, fail closed
   budget:
     enforcement: enabled
-    default-daily-usd: 5.00
+    default-daily-usd: ${GPU7_DEFAULT_DAILY_USD:5.00}
     tenant-daily-usd:
       smoke-budget-tenant: 0.000001   # acceptance: exhausted after one mock call
+      # Paid arm (opencode.ai) under test: cap the smoke/check tenant. A gpu7-check run costs
+      # well under $0.001.
+      smoke-tenant: ${GPU7_SMOKE_DAILY_USD:0.05}
       # Benchmark tenants use free models only (cost 0 never reaches the limit). Defence in
       # depth: if a priced model were ever routed for them, the first call exhausts the budget.
       rb-fixed-g: 0.000001

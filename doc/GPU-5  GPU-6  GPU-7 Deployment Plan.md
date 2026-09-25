@@ -32,8 +32,8 @@ This specification is the **contract**. What the code implements and what accept
 
 | Profile | Deployment contract | Implementation | Acceptance |
 | --- | --- | --- | --- |
-| GPU-5 | Defined (this spec; `deployments/homelab/`) | Manifests, Gateway routing config, gRPC over mTLS (§13), streaming (vLLM/TEI) done. **Missing:** execution-JWT signing + JWKS (T-K8S-6a), so Envoy rejects Gateway→backend calls (fail closed) | Phases 0–4 and per-service smoke executable; **§24 end-to-end blocked on T-K8S-6a**; no PoC run yet (plan §11) |
-| GPU-7 | Defined (this spec; `deployments/external/`) | **Complete for the contract:** mTLS + tenant authorization, registry, mapping, streaming, Responses API, health, circuit breaker, cost ledger, budget, sensitivity, kill switch (config + persisted runtime control), multi-provider failover, digest-pinned packaging. Outstanding: §49 freeze attestation (reviewer sign-off) | **§37 passing:** `ExternalAcceptanceTest` (31), packaged smoke, live `tools/gpu7-check` (OpenRouter free models), §46 checklist 16/16 |
+| GPU-5 | Defined (this spec; `deployments/homelab/`) | Manifests, Gateway routing config, gRPC over mTLS (§13), streaming (vLLM/TEI), **execution-JWT signing + JWKS (T-K8S-6a, §12.1)** and static model readiness done | **Cluster:** EMBED/SYNTHESIZE/stream/RERANK through Gateway → Envoy (JWT) → GPUs pass (§24.1.2–5, .10). Unsigned→401 and direct backend access denied (§24.2.5–6). Local end-to-end 17/17 (§24.2.7 fail closed). **Pending:** load baselines (plan §11) and the full §24 suite |
+| GPU-7 | Defined (this spec; `deployments/external/`) | **Complete for the contract:** mTLS + tenant authorization, registry, mapping, streaming, Responses API, health, circuit breaker, cost ledger, budget, sensitivity, kill switch (config + persisted runtime control), multi-provider failover, digest-pinned packaging. Outstanding: §49 freeze attestation (reviewer sign-off) | **§37 passing:** `ExternalAcceptanceTest` (31), packaged smoke, live `tools/gpu7-check` (opencode.ai arm 15/15 current; OpenRouter free arm 20/20), §46 checklist 16/16 |
 ---
 
 # 2. Architecture
@@ -598,6 +598,44 @@ Gateway readiness MUST precede Envoy readiness.
 These requirements apply only to GPU-5.
 
 They do not apply to GPU-7.
+
+## 12.1 Implementation contract (T-K8S-6a)
+
+Fixed by T-K8S-6a (GPU-5 implementation plan §13).
+
+Token (compact JWS). Header `{"alg":"ES256","typ":"JWT","kid":<current kid>}`. Claims:
+
+| Claim | Value |
+|---|---|
+| `iss`, `aud` | `synanton-gpu-gateway`, `gpu-plane-execution` |
+| `iat`, `nbf`, `exp` | `exp = iat + ttl`. Default ttl 60 s, allowed 1–300 s (checked at startup). Envoy validates on arrival only. |
+| `jti` | Random UUID per upstream request |
+| `sub` | Caller mTLS principal, when known |
+| `tenant_id`, `request_id`, `op`, `model` | From the `ExecutionRequest`; `model` is the logical ID |
+| `body_sha256` | base64url(SHA-256(exact body bytes sent to Envoy)); an empty body for GET. Envoy enforcement of this claim is a T-K8S-6b follow-up. |
+
+The Gateway sends the token as `Authorization: Bearer <jws>` on every Gateway→Envoy request: execute, stream, liveness ping, and model-readiness poll when used.
+
+Keys: Secret `gpu-gateway-jwt-keys`, mounted at `gpu-gateway.execution-jwt.key-dir` (default `/etc/gpu-gateway/keys`).
+
+| File | Content |
+|---|---|
+| `current.key` | PKCS#8 PEM, EC P-256; the only signing key |
+| `current.pub`, `previous.pub` | SPKI PEM; the exactly-two published keys |
+
+Startup fails closed on any of these:
+- missing files;
+- SEC1 private-key format;
+- a curve other than P-256;
+- `current.key` and `current.pub` not a pair;
+- identical current and previous keys;
+- any other number of public keys.
+
+`kid` is the RFC 7638 JWK thumbprint. Only key IDs are logged.
+
+JWKS: a dedicated listener on `gpu-gateway.execution-jwt.jwks-port` (default 8090) serves exactly `GET /internal/.well-known/jwks.json` with `Cache-Control: max-age=300`. It is separate from actuator (:8091) and gRPC (:9090). The readiness contributor `executionJwt` is UP only once keys are loaded and the listener is bound.
+
+Rotation (T-K8S-25): previous := current, current := new key pair, then restart the Gateway. Tokens signed with the previous key keep verifying while it is published.
 
 ---
 

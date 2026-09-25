@@ -20,6 +20,7 @@ public class GpuGatewayProperties {
     private Budget budget = new Budget();
     private Usage usage = new Usage();
     private Security security = new Security();
+    private ExecutionJwt executionJwt = new ExecutionJwt();
     private ModelCatalog modelCatalog = new ModelCatalog();
     private Map<String, ModelConfig> models = new HashMap<>();
 
@@ -28,6 +29,22 @@ public class GpuGatewayProperties {
         private String vllmEndpoint;
         private int timeoutMs;
         private int modelLoadTimeoutMs;
+        /**
+         * Local model readiness: {@code poll} (default) asks {@code <vllm-endpoint>/v1/models}
+         * before dispatch. {@code static} is for Envoy-fronted GPU-5 backends: each model is an
+         * always-on pod whose readiness Kubernetes owns, and one Envoy endpoint can't answer
+         * {@code /v1/models} for three backends. A down backend then surfaces as Envoy 503
+         * (NOT_ACCEPTED). GPU-5 plan §13.3 J3.
+         */
+        private String modelReadiness = "poll";
+        /** Liveness path under the endpoint for GetStatus reconciliation (Envoy: {@code /healthz}). */
+        private String healthPath = "/health";
+
+        public String getModelReadiness() { return modelReadiness; }
+        public void setModelReadiness(String modelReadiness) { this.modelReadiness = modelReadiness; }
+        public boolean isStaticModelReadiness() { return "static".equalsIgnoreCase(modelReadiness); }
+        public String getHealthPath() { return healthPath; }
+        public void setHealthPath(String healthPath) { this.healthPath = healthPath; }
 
         public String getStrategy() { return strategy; }
         public void setStrategy(String strategy) { this.strategy = strategy; }
@@ -39,6 +56,36 @@ public class GpuGatewayProperties {
         public void setModelLoadTimeoutMs(int modelLoadTimeoutMs) {
             this.modelLoadTimeoutMs = modelLoadTimeoutMs;
         }
+    }
+
+    /**
+     * GPU-5 execution JWT (Deployment Plan §12, T-K8S-6a). When enabled, every Gateway→Envoy
+     * request carries an ES256 token that Envoy's {@code jwt_authn} verifies against the JWKS
+     * served on {@code jwks-port}. Keys are file-mounted from a Kubernetes Secret, never
+     * passed via the environment or logged: {@code current.key} (PKCS#8 EC P-256, signs) plus
+     * exactly two public keys, {@code current.pub} and {@code previous.pub} (SPKI PEM, both
+     * published). Not used by GPU-7.
+     */
+    public static class ExecutionJwt {
+        private boolean enabled = false;
+        private String keyDir = "/etc/gpu-gateway/keys";
+        private String issuer = "synanton-gpu-gateway";
+        private String audience = "gpu-plane-execution";
+        private int ttlSeconds = 60;
+        private int jwksPort = 8090;
+
+        public boolean isEnabled() { return enabled; }
+        public void setEnabled(boolean enabled) { this.enabled = enabled; }
+        public String getKeyDir() { return keyDir; }
+        public void setKeyDir(String keyDir) { this.keyDir = keyDir; }
+        public String getIssuer() { return issuer; }
+        public void setIssuer(String issuer) { this.issuer = issuer; }
+        public String getAudience() { return audience; }
+        public void setAudience(String audience) { this.audience = audience; }
+        public int getTtlSeconds() { return ttlSeconds; }
+        public void setTtlSeconds(int ttlSeconds) { this.ttlSeconds = ttlSeconds; }
+        public int getJwksPort() { return jwksPort; }
+        public void setJwksPort(int jwksPort) { this.jwksPort = jwksPort; }
     }
 
     /**
@@ -61,6 +108,12 @@ public class GpuGatewayProperties {
         private String allowedModelPattern;
         /** Extra request headers sent to this provider (e.g. OpenRouter attribution). */
         private Map<String, String> headers = new HashMap<>();
+        /**
+         * Optional request header carrying a stable per-tenant session ID (a SHA-256 prefix,
+         * never the tenant ID). Example: {@code x-opencode-session} for opencode.ai context
+         * caching.
+         */
+        private String sessionHeader;
         private Health health = new Health();
         private CircuitBreaker circuitBreaker = new CircuitBreaker();
 
@@ -70,6 +123,8 @@ public class GpuGatewayProperties {
         public void setBaseUrl(String baseUrl) { this.baseUrl = baseUrl; }
         public String getAllowedModelPattern() { return allowedModelPattern; }
         public void setAllowedModelPattern(String allowedModelPattern) { this.allowedModelPattern = allowedModelPattern; }
+        public String getSessionHeader() { return sessionHeader; }
+        public void setSessionHeader(String sessionHeader) { this.sessionHeader = sessionHeader; }
         public Map<String, String> getHeaders() { return headers; }
         public void setHeaders(Map<String, String> headers) { this.headers = headers; }
         public boolean isEnabled() { return enabled; }
@@ -371,6 +426,8 @@ public class GpuGatewayProperties {
     public void setBudget(Budget budget) { this.budget = budget; }
     public Usage getUsage() { return usage; }
     public Security getSecurity() { return security; }
+    public ExecutionJwt getExecutionJwt() { return executionJwt; }
+    public void setExecutionJwt(ExecutionJwt executionJwt) { this.executionJwt = executionJwt; }
     public void setSecurity(Security security) { this.security = security; }
     public void setUsage(Usage usage) { this.usage = usage; }
     public void setRouting(Routing routing) { this.routing = routing; }

@@ -1,8 +1,10 @@
 # Envoy execution-perimeter config (spec §6, §12; tickets T-K8S-6b/6).
 # - Listener :8080, requires a valid ES256 execution JWT from the Gateway.
-# - JWKS fetched from the Gateway's internal endpoint; cache 5 min (spec §8).
-#   NOTE: the Gateway does not serve JWKS/sign JWTs yet (T-K8S-6a pending), so
-#   jwt_authn fails closed and Gateway→Envoy calls are rejected until 6a lands.
+# - JWKS fetched from the Gateway's internal endpoint (T-K8S-6a, :8090); cache 5 min
+#   (spec §8/§12). It is fetched at startup (async_fetch) and re-fetched 5 s after a
+#   failed fetch. Until a fetch succeeds, every request is 401 (fail closed).
+# - /healthz: signed liveness target for the Gateway's GetStatus ping (direct 200).
+# - forward: false. The token stops at Envoy and never reaches TEI/vLLM.
 # - Routes by path prefix to the three inference services (node1 TEI embedding,
 #   node2 vLLM reranker, node3 vLLM synthesis); 300 s upstream timeout (spec §31).
 #
@@ -35,6 +37,10 @@ data:
                         - name: gpu-plane
                           domains: ["*"]
                           routes:
+                            - match: { path: /healthz }   # JWT-protected like every route
+                              direct_response:
+                                status: 200
+                                body: { inline_string: "ok" }
                             - match: { prefix: /v1/chat/completions }
                               route:
                                 cluster: vllm_synthesis
@@ -67,7 +73,12 @@ data:
                                   timeout: 5s
                                 cache_duration:
                                   seconds: 300   # JWKS cache TTL, spec §8
-                              forward: true
+                                async_fetch:     # fetch JWKS at startup, not on the first request
+                                  failed_refetch_duration: 5s
+                                retry_policy:
+                                  num_retries: 3
+                                  retry_back_off: { base_interval: 1s, max_interval: 5s }
+                              forward: false   # don't pass the execution JWT to the backends
                           rules:
                             - match: { prefix: / }
                               requires:
@@ -75,7 +86,43 @@ data:
                       - name: envoy.filters.http.router
                         typed_config:
                           "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
+        # Probe listener: kubelet can't reach the admin interface (127.0.0.1:9901, kept
+        # private: it exposes /quitquitquit, /config_dump, …). Only GET /ready is proxied.
+        - name: health
+          address:
+            socket_address:
+              address: 0.0.0.0
+              port_value: 9902
+          filter_chains:
+            - filters:
+                - name: envoy.filters.network.http_connection_manager
+                  typed_config:
+                    "@type": type.googleapis.com/envoy.extensions.filters.network.http_connection_manager.v3.HttpConnectionManager
+                    stat_prefix: health
+                    route_config:
+                      name: health
+                      virtual_hosts:
+                        - name: health
+                          domains: ["*"]
+                          routes:
+                            - match: { path: /ready }
+                              route: { cluster: envoy_admin }
+                    http_filters:
+                      - name: envoy.filters.http.router
+                        typed_config:
+                          "@type": type.googleapis.com/envoy.extensions.filters.http.router.v3.Router
       clusters:
+        - name: envoy_admin
+          type: STATIC
+          load_assignment:
+            cluster_name: envoy_admin
+            endpoints:
+              - lb_endpoints:
+                  - endpoint:
+                      address:
+                        socket_address:
+                          address: 127.0.0.1
+                          port_value: 9901
         - name: gpu_gateway
           type: STRICT_DNS
           lb_policy: ROUND_ROBIN

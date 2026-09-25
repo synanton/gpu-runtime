@@ -28,9 +28,41 @@ public class VllmModelManager implements ModelManager {
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
 
+    /**
+     * {@code static} readiness (GPU-5 plan §13.3 J3): Envoy-fronted local models are always-on
+     * pods owned by Kubernetes readiness, so there's nothing to poll. One Envoy endpoint can't
+     * answer {@code /v1/models} for three backends, and a down backend surfaces as Envoy 503
+     * (NOT_ACCEPTED) at dispatch.
+     */
+    private final boolean staticReadiness;
+    private final org.synanton.gpu.adapter.out.jwt.ExecutionJwtSigner jwtSigner;
+
     public VllmModelManager(String vllmEndpointUrl,
                              Duration modelLoadTimeout,
                              ObjectMapper objectMapper) {
+        this(vllmEndpointUrl, modelLoadTimeout, objectMapper, false, null);
+    }
+
+    @org.springframework.beans.factory.annotation.Autowired
+    public VllmModelManager(String vllmEndpointUrl,
+                             Duration modelLoadTimeout,
+                             ObjectMapper objectMapper,
+                             org.synanton.gpu.config.GpuGatewayProperties properties,
+                             org.springframework.beans.factory.ObjectProvider<org.synanton.gpu.adapter.out.jwt.ExecutionJwtSigner> jwtSigner) {
+        this(vllmEndpointUrl, modelLoadTimeout, objectMapper,
+                properties.getDispatch().isStaticModelReadiness(), jwtSigner.getIfAvailable());
+    }
+
+    public VllmModelManager(String vllmEndpointUrl,
+                             Duration modelLoadTimeout,
+                             ObjectMapper objectMapper,
+                             boolean staticReadiness,
+                             org.synanton.gpu.adapter.out.jwt.ExecutionJwtSigner jwtSigner) {
+        this.staticReadiness = staticReadiness;
+        this.jwtSigner = jwtSigner;
+        if (staticReadiness) {
+            log.info("Model readiness: static (Envoy-fronted local backends; Kubernetes readiness is authoritative)");
+        }
         this.vllmEndpoint = vllmEndpointUrl;
         this.modelLoadTimeout = modelLoadTimeout;
         this.httpClient = HttpClient.newBuilder()
@@ -41,12 +73,20 @@ public class VllmModelManager implements ModelManager {
 
     @Override
     public ModelStatus getStatus(String modelId) {
+        if (staticReadiness) {
+            return ModelStatus.READY;
+        }
         try {
-            HttpRequest request = HttpRequest.newBuilder()
+            HttpRequest.Builder builder = HttpRequest.newBuilder()
                     .uri(URI.create(vllmEndpoint + "/v1/models"))
                     .GET()
-                    .timeout(Duration.ofSeconds(5))
-                    .build();
+                    .timeout(Duration.ofSeconds(5));
+            if (jwtSigner != null) {
+                builder.header("Authorization", "Bearer " + jwtSigner.sign(
+                        new org.synanton.gpu.adapter.out.jwt.ExecutionJwtSigner.Subject("MODELS", modelId, null, null, null),
+                        new byte[0]));
+            }
+            HttpRequest request = builder.build();
 
             HttpResponse<String> response = httpClient.send(request, HttpResponse.BodyHandlers.ofString());
             if (response.statusCode() == 200) {

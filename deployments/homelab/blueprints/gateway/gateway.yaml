@@ -14,9 +14,9 @@
 #   gpu-gateway-tls       server.crt, server.key, ca.crt — self-signed PKI from
 #                         deployments/external/scripts/gen-certs.sh (doc/GPU Plane mTLS Setup.md).
 #                         Required: security.mode=mtls fails closed without it.
-#   gpu-gateway-jwt-keys  RESERVED for T-K8S-6a (execution JWT signing, pending).
-#                         Mounted optionally; nothing reads it yet. Until 6a lands
-#                         Envoy's jwt_authn rejects Gateway→Envoy calls (fail closed).
+#   gpu-gateway-jwt-keys  REQUIRED (T-K8S-6a): current.key (PKCS#8 EC P-256) + current.pub +
+#                         previous.pub. Execution JWT signing + JWKS on :8090 (Plan §12.1).
+#                         Missing or invalid keys: the Gateway fails to start (fail closed).
 apiVersion: v1
 kind: ConfigMap
 metadata:
@@ -35,9 +35,24 @@ data:
           synanton-platform:           # client-certificate CN of the Platform
             tenants: ["*"]
             roles: [admin]
+          synanton-benchmark:          # retrieval benchmark (platform plan §6 Phase B1-K): explicit
+            tenants:                   # tenants only, never "*", no admin role. Certificate:
+              - rb-fixed-g5            #   scripts/issue-client-cert.sh synanton-benchmark
+              - rb-semantic-g5
+              - rb-dryrun-g5
+              - rb-hier-g5             #   hierarchical chunking (B2/T05)
+              - rb-graph-g5            #   graph enrichment + rank fusion (B2/T08-T09)
       dispatch:
         strategy: direct
         vllm-endpoint: http://envoy:8080
+        # Envoy-fronted always-on backends: no /v1/models poll (GPU-5 plan §13.3 J3);
+        # GetStatus liveness goes to Envoy's signed /healthz
+        model-readiness: static
+        health-path: /healthz
+      execution-jwt:                   # T-K8S-6a (Plan §12/§12.1): ES256 token on every Gateway→Envoy call
+        enabled: true
+        key-dir: /etc/gpu-gateway/keys # Secret gpu-gateway-jwt-keys (plan §7); never via env
+        jwks-port: 8090                # Envoy fetches /internal/.well-known/jwks.json here
       model-catalog:
         operations:
           SYNTHESIZE:
@@ -101,7 +116,8 @@ spec:
       terminationGracePeriodSeconds: 45 # spec §31 (drain budget 30 s < this)
       containers:
         - name: gateway
-          image: local-registry:5000/gpu-gateway:0.1.0
+          # digest-pinned (spec §8): a rebuilt image keeps tag 0.1.0, and IfNotPresent would keep the cached one
+          image: local-registry:5000/gpu-gateway:0.1.0@sha256:8a747eb2c2d77bb7a39d3cb4400746183939d5899829c410c69a67c668e8ef13
           imagePullPolicy: IfNotPresent
           env:
             # names the app binds in application.yml (PR #15 review P0.2/P0.3)
@@ -122,6 +138,7 @@ spec:
           ports:
             - { containerPort: 9090, name: grpc }
             - { containerPort: 8091, name: metrics }
+            - { containerPort: 8090, name: jwks }    # JWKS for Envoy only (NetworkPolicy)
           resources:
             requests:
               cpu: "1"
@@ -136,7 +153,7 @@ spec:
             - name: tls
               mountPath: /etc/gpu-gateway/tls
               readOnly: true
-            - name: jwt-keys # reserved for T-K8S-6a
+            - name: jwt-keys # T-K8S-6a signing keys (required)
               mountPath: /etc/gpu-gateway/keys
               readOnly: true
           readinessProbe:
@@ -164,7 +181,6 @@ spec:
           secret:
             secretName: gpu-gateway-jwt-keys
             defaultMode: 0400
-            optional: true
 ---
 apiVersion: v1
 kind: Service
@@ -177,4 +193,23 @@ spec:
   ports:
     - { name: grpc, port: 9090, targetPort: 9090 }
     - { name: metrics, port: 8091, targetPort: 8091 }
+    - { name: jwks, port: 8090, targetPort: 8090 }   # Envoy remote_jwks (NetworkPolicy: Envoy only)
   type: ClusterIP
+---
+# External gRPC access for a Platform outside the cluster, e.g. the retrieval benchmark on the
+# workstation (benchmark plan §6 Phase B1-K). mTLS still authenticates every call, and the
+# NetworkPolicy "gateway" limits the source addresses. externalTrafficPolicy: Local keeps the
+# client source IP, so that ipBlock rule works; connect to the Gateway's node (node1).
+# Clients must set the TLS authority to a server-cert SAN: GPU_TLS_AUTHORITY=gpu-gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-gateway-external
+  namespace: gpu-plane
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    app: gpu-gateway
+  ports:
+    - { name: grpc, port: 9090, targetPort: 9090, nodePort: 30990 }

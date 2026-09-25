@@ -35,6 +35,7 @@ spec:
             - info
           ports:
             - containerPort: 8080
+            - containerPort: 9902 # probe listener (/ready only)
           resources:
             requests:
               cpu: "0.5"
@@ -49,14 +50,14 @@ spec:
           readinessProbe:
             httpGet:
               path: /ready
-              port: 9901
+              port: 9902
             initialDelaySeconds: 5
             periodSeconds: 5
             failureThreshold: 12 # wait for JWKS fetch (Gateway readiness precedes Envoy, §12)
           livenessProbe:
             httpGet:
               path: /ready
-              port: 9901
+              port: 9902
             initialDelaySeconds: 30
             periodSeconds: 15
       volumes:

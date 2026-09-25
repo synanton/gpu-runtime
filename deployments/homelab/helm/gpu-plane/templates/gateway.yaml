@@ -19,9 +19,19 @@ data:
           {{ .Values.gateway.platformPrincipal }}:
             tenants: ["*"]
             roles: [admin]
+          {{- range $cn, $p := .Values.gateway.extraPrincipals }}
+          {{ $cn }}:
+            tenants: {{ toJson $p.tenants }}
+          {{- end }}
       dispatch:
         strategy: {{ .Values.gateway.strategy }}
         vllm-endpoint: {{ .Values.gateway.vllmEndpoint }}
+        model-readiness: static   # Envoy-fronted always-on backends (GPU-5 plan §13.3 J3)
+        health-path: /healthz
+      execution-jwt:              # T-K8S-6a (Plan §12/§12.1)
+        enabled: true
+        key-dir: /etc/gpu-gateway/keys
+        jwks-port: {{ .Values.gateway.jwksPort }}
       model-catalog:
         operations:
           SYNTHESIZE:
@@ -93,13 +103,14 @@ spec:
           ports:
             - { containerPort: 9090, name: grpc }
             - { containerPort: 8091, name: metrics }
+            - { containerPort: {{ .Values.gateway.jwksPort }}, name: jwks } # JWKS for Envoy only
           resources:
             requests: { cpu: "1", memory: 1Gi }
             limits: { cpu: "4", memory: 4Gi }
           volumeMounts:
             - { name: config, mountPath: /etc/gpu-gateway/config, readOnly: true }
             - { name: tls, mountPath: /etc/gpu-gateway/tls, readOnly: true }
-            - { name: jwt-keys, mountPath: /etc/gpu-gateway/keys, readOnly: true } # reserved: T-K8S-6a
+            - { name: jwt-keys, mountPath: /etc/gpu-gateway/keys, readOnly: true } # T-K8S-6a signing keys
           readinessProbe:
             httpGet: { path: /actuator/health/readiness, port: 8091 }
             initialDelaySeconds: 15
@@ -118,7 +129,6 @@ spec:
           secret:
             secretName: {{ .Values.secrets.gatewayJwtKeys }}
             defaultMode: 0400
-            optional: true
 ---
 apiVersion: v1
 kind: Service
@@ -129,4 +139,20 @@ spec:
   ports:
     - { name: grpc, port: 9090, targetPort: 9090 }
     - { name: metrics, port: 8091, targetPort: 8091 }
+    - { name: jwks, port: {{ .Values.gateway.jwksPort }}, targetPort: {{ .Values.gateway.jwksPort }} }
   type: ClusterIP
+{{- if .Values.gateway.external.enabled }}
+---
+# External gRPC (benchmark plan B1-K): mTLS still applies; NetworkPolicy limits sources;
+# externalTrafficPolicy Local keeps the client IP for that ipBlock. Connect to the Gateway's node.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-gateway-external
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector: { app: gpu-gateway }
+  ports:
+    - { name: grpc, port: 9090, targetPort: 9090, nodePort: {{ .Values.gateway.external.nodePort }} }
+{{- end }}
