@@ -211,7 +211,7 @@ vllm serve /models
   --max-num-seqs 8
 ```
 
-Envelope: ~8.2 GB weights (bf16) + KV cache inside 0.90 × 16 GB. If KV pressure appears, drop `--max-model-len` to 16384.
+Weights: 7.6 GB bf16 on disk (measured, §4.3). KV cache takes the rest of the 0.90 × 16 GB envelope — an envelope, not a guarantee; the observed footprint is what §9 accepts. If KV pressure appears, drop `--max-model-len` to 16384.
 
 ### node2 — reranker (`vllm-reranker`)
 
@@ -227,7 +227,7 @@ vllm serve /models
 
 Dedicated GPU — the retracted colocation's port-8001/network-namespace hack is
 gone; every inference Service is uniformly `:8000`. 0.40 is a generous envelope
-for a 0.6 B pooling model (~1.2 GB weights); raise only if profiling says so.
+for a 0.6 B pooling model (1.2 GB weights on disk, measured); raise only if the observed footprint says so.
 
 The `--hf-overrides` block is required for the **official** `Qwen/Qwen3-Reranker-0.6B`
 checkpoint (it is a `Qwen3ForCausalLM` checkpoint; the override routes it to the
@@ -248,7 +248,7 @@ Notes:
 
 - `/models` is the node-local `bge-base-en-v1.5` dir (hostPath, read-only);
   TEI loads local paths directly — no Hub access (`HF_HUB_OFFLINE=1` set anyway).
-- `--dtype float16`: Turing has no bf16; fp16 bge-base is ~0.5 GB in 4 GB VRAM.
+- `--dtype float16`: Turing has no bf16. The weights are a 438 MB (418 MiB) fp32 safetensors file on disk (measured), loaded as fp16; the observed VRAM is recorded in §11.
 - TEI serves the OpenAI-compatible `POST /v1/embeddings` route
   (`--served-model-name` applies to it). Verify at bring-up; if the mirrored
   build lacks the OpenAI route, remap in Envoy (`/v1/embeddings` → TEI `/embed`)
@@ -360,8 +360,18 @@ Executable after phase 9 against the packaged deployment:
   through the single GPU Gateway with clients using only the logical model IDs
   (no physical node addressing).
 
-**Empirical VRAM rule (review P1.5):** all VRAM figures in §11 are observed
-values, never arithmetic derived from `--gpu-memory-utilization`.
+**Empirical GPU acceptance (review P1.5)** — replaces any computed "VRAM budget";
+`--gpu-memory-utilization` values are envelopes, never evidence:
+
+1. All three engines start **concurrently** (one per node, `deploy.sh inference`)
+   and each reaches Ready and loads its model.
+2. Each survives a representative **max-context** request (synthesis: the largest
+   tested `--max-model-len`; embedding: 512-token inputs; reranker: a
+   representative candidate set) plus the documented concurrency, without CUDA OOM.
+3. Each GPU keeps an **observed free-VRAM floor ≥ 512 MiB** during (2)
+   (`scripts/record-vram.sh` / `nvidia-smi` sampled during the load).
+4. The observed values — used/total, free-VRAM floor, max tested context and
+   concurrency, p50/p95 latency — are recorded in §11 from the actual run.
 
 ## 10. Helm packaging path
 
@@ -379,11 +389,17 @@ which is formally a GPU-6 ticket — homelab treats the chart as convenience, no
 
 ## 11. Observed baselines (fill in during bring-up)
 
-| Pod | Node | VRAM used / total | Notes |
-|-----|------|-------------------|-------|
-| tei-embedding | node1 | _ / 4096 MiB | dedicated GPU (GTX 1650, sm_7.5, fp16) |
-| vllm-reranker | node2 | _ / 16380 MiB | dedicated GPU (RTX 4060 Ti) |
-| vllm-synthesis | node3 | _ / 16311 MiB | dedicated GPU (RTX 5060 Ti) |
+**PoC status (2026-09-25): no GPU-5 PoC run has been performed yet** — the
+`gpu-plane` namespace is empty. Phases 0–4 and the per-service smoke tests
+(§8.1–8.3) are executable; end-to-end execution through the Gateway waits for
+T-K8S-6a (§12.2). The table below is intentionally blank: values are recorded
+from the actual run per §9 criteria 1–4, never estimated or pre-filled.
+
+| Pod | Node | VRAM used / total | Free-VRAM floor under load | Max tested context / concurrency | p50 / p95 | Notes |
+|-----|------|-------------------|----------------------------|----------------------------------|-----------|-------|
+| tei-embedding | node1 | _ / 4096 MiB | _ | 512 tokens / _ | _ | GTX 1650, sm_7.5, fp16 |
+| vllm-reranker | node2 | _ / 16380 MiB | _ | _ / _ | _ | RTX 4060 Ti |
+| vllm-synthesis | node3 | _ / 16311 MiB | _ | _ / _ | _ | RTX 5060 Ti |
 
 ## 11a. Cluster lifecycle (power off / on)
 
