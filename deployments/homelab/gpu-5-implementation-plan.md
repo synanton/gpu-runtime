@@ -276,18 +276,12 @@ Each phase's exit criteria must pass before moving on.
 Secrets are created imperatively and never committed (spec §12/§13):
 
 ```bash
-# Phase 5 — execution JWT signing keys (T-K8S-6a, Plan §12.1): ES256 / P-256, PKCS#8.
-# Exactly two public keys (current + previous); only the current private key is deployed.
-K=git-ignored/gpu5-jwt && mkdir -p "$K" && chmod 700 "$K"
-for k in current previous; do
-  openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256 -out "$K/$k.key"
-  openssl pkey -in "$K/$k.key" -pubout -out "$K/$k.pub"
-done
-kubectl -n gpu-plane create secret generic gpu-gateway-jwt-keys \
-  --from-file=current.key="$K/current.key" \
-  --from-file=current.pub="$K/current.pub" --from-file=previous.pub="$K/previous.pub"
-# (openssl ecparam -genkey writes SEC1, which the Gateway rejects; convert with
-#  openssl pkcs8 -topk8 -nocrypt. Keep $K/previous.key offline or delete it.)
+# Phase 5 — execution JWT signing keys (T-K8S-6a, Plan §12.1): ES256 / P-256, PKCS#8,
+# current + previous pairs in git-ignored/gpu5-jwt; creates/replaces Secret gpu-gateway-jwt-keys
+deployments/homelab/scripts/generate-key.sh --apply
+# rotation later (T-K8S-25): previous := current, new current; then restart the Gateway
+#   deployments/homelab/scripts/generate-key.sh --rotate --apply
+#   kubectl -n gpu-plane rollout restart deploy/gpu-gateway
 
 # Phase 6 — gRPC mTLS: self-signed PKI (doc/GPU Plane mTLS Setup.md); keep ca.key offline
 deployments/external/scripts/gen-certs.sh git-ignored/gpu5-pki synanton-platform
