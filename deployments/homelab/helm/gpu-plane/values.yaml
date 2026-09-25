@@ -62,7 +62,7 @@ gateway:
   # Certificates come from scripts/issue-client-cert.sh <cn> (existing CA).
   extraPrincipals:
     synanton-benchmark: # retrieval benchmark (platform plan §6 Phase B1-K)
-      tenants: [rb-fixed-g5, rb-semantic-g5, rb-dryrun-g5]
+      tenants: [rb-fixed-g5, rb-semantic-g5, rb-dryrun-g5, rb-hier-g5, rb-graph-g5]
   vllmEndpoint: http://envoy:8080 # Envoy routes by path to the three backends
   jwksPort: 8090 # execution-JWT JWKS listener (T-K8S-6a); must match envoy.jwksUri
   # External gRPC via NodePort (benchmark plan B1-K). mTLS still applies; clients set the TLS

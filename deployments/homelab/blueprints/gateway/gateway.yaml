@@ -40,6 +40,8 @@ data:
               - rb-fixed-g5            #   scripts/issue-client-cert.sh synanton-benchmark
               - rb-semantic-g5
               - rb-dryrun-g5
+              - rb-hier-g5             #   hierarchical chunking (B2/T05)
+              - rb-graph-g5            #   graph enrichment + rank fusion (B2/T08-T09)
       dispatch:
         strategy: direct
         vllm-endpoint: http://envoy:8080
