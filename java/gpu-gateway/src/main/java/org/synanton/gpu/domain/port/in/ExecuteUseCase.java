@@ -1,6 +1,7 @@
 package org.synanton.gpu.domain.port.in;
 
 import org.synanton.gpu.domain.model.Execution;
+import org.synanton.gpu.domain.port.out.ExecutionRuntime;
 import org.synanton.gpu.v1.ExecutionRequest;
 
 /**
@@ -22,4 +23,22 @@ public interface ExecuteUseCase {
      * @return the completed or failed execution record
      */
     Execution execute(ExecutionRequest request);
+
+    /**
+     * Streaming variant (Deployment Plan §10, gRPC {@code ExecuteStream}). Same idempotency,
+     * routing and admission as {@link #execute}; SYNTHESIZE only. Normalized SSE frames are
+     * delivered to {@code listener} as they arrive; the returned execution is the terminal
+     * record. An idempotent replay returns the existing execution without frames.
+     *
+     * @throws org.synanton.gpu.domain.service.RoutingDeniedException with
+     *         {@code capability_not_supported} for non-SYNTHESIZE operations or runtimes
+     *         without streaming — never a silent fallback to unary
+     */
+    Execution executeStream(ExecutionRequest request, StreamListener listener);
+
+    /** Receives stream frames; told the execution ID once the request is admitted. */
+    interface StreamListener extends ExecutionRuntime.StreamChunkSink {
+        default void onAdmitted(String executionId) {
+        }
+    }
 }

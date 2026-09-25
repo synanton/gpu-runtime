@@ -6,7 +6,7 @@ import org.synanton.gpu.domain.model.ExecutionError;
 import org.synanton.gpu.domain.model.ExecutionUsage;
 import org.synanton.gpu.domain.model.RetryDisposition;
 import org.synanton.gpu.domain.model.RuntimeTarget;
-import org.synanton.gpu.domain.port.out.ExecutionRuntime;
+import org.synanton.gpu.domain.port.out.StreamingExecutionRuntime;
 import org.synanton.gpu.domain.service.HeartbeatManager;
 import org.synanton.gpu.v1.ExecutionRequest;
 import org.synanton.gpu.v1.Operation;
@@ -45,7 +45,7 @@ import java.time.Duration;
  */
 @Component
 @Slf4j
-public class VllmRuntime implements ExecutionRuntime {
+public class VllmRuntime implements StreamingExecutionRuntime {
 
     private final HttpClient httpClient;
     private final ObjectMapper objectMapper;
@@ -112,6 +112,81 @@ public class VllmRuntime implements ExecutionRuntime {
                     RetryDisposition.ACCEPTED_UNKNOWN);
         } finally {
             heartbeat.stop();
+        }
+    }
+
+    /**
+     * GPU-5 streaming (P1.2): vLLM serves OpenAI-compatible SSE. The served model name
+     * is the logical ID, so no rewrite is needed; the shared {@link SseRelay} enforces
+     * the §10 framing and usage rules identically to the GPU-7 provider path.
+     */
+    @Override
+    public RuntimeResult executeStreaming(ExecutionRequest request, RuntimeTarget target,
+                                          StreamChunkSink sink) {
+        long startMs = System.currentTimeMillis();
+        try {
+            JsonNode original = objectMapper.readTree(request.getPayload().toByteArray());
+            if (!(original instanceof com.fasterxml.jackson.databind.node.ObjectNode payload)) {
+                return new RuntimeResult.Failure(
+                        ExecutionError.nonRetryable("invalid_request", "payload must be a JSON object"),
+                        RetryDisposition.DEFINITELY_FAILED);
+            }
+            boolean clientWantsUsage = SseRelay.clientRequestedUsage(payload);
+            SseRelay.requestStreamingWithUsage(payload);
+
+            HttpRequest httpRequest = HttpRequest.newBuilder()
+                    .uri(URI.create(resolveEndpoint(target.endpointUrl(), request.getOperation())))
+                    .header("Content-Type", "application/json")
+                    .header("Accept", "text/event-stream")
+                    .POST(HttpRequest.BodyPublishers.ofByteArray(objectMapper.writeValueAsBytes(payload)))
+                    .timeout(requestTimeout)
+                    .build();
+            HttpResponse<java.util.stream.Stream<String>> response =
+                    httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
+
+            if (response.statusCode() != 200) {
+                try (var lines = response.body()) {
+                    lines.forEach(l -> { }); // drain; body is not echoed (may contain prompt text)
+                }
+                return new RuntimeResult.Failure(
+                        response.statusCode() >= 500
+                                ? ExecutionError.retryable("RUNTIME_UNAVAILABLE", "vLLM HTTP " + response.statusCode())
+                                : ExecutionError.nonRetryable("RUNTIME_FAILED", "vLLM HTTP " + response.statusCode()),
+                        response.statusCode() >= 500 ? RetryDisposition.NOT_ACCEPTED : RetryDisposition.DEFINITELY_FAILED);
+            }
+            SseRelay.Outcome outcome;
+            try (var lines = response.body()) {
+                outcome = SseRelay.relay(lines, request.getModel(), clientWantsUsage,
+                        objectMapper, sink, target.runtimeClass(), startMs, requestTimeout);
+            }
+            if (outcome.timedOut()) {
+                return new RuntimeResult.Failure(
+                        ExecutionError.nonRetryable("RUNTIME_TIMEOUT", "vLLM stream exceeded the deadline"),
+                        RetryDisposition.ACCEPTED_UNKNOWN);
+            }
+            if (!outcome.sawDone()) {
+                return new RuntimeResult.Failure(
+                        ExecutionError.nonRetryable("RUNTIME_FAILED", "vLLM stream ended without [DONE]"),
+                        RetryDisposition.COMPLETED_UNKNOWN);
+            }
+            return new RuntimeResult.Success(outcome.usage(), new byte[0]);
+        } catch (ConnectException e) {
+            return new RuntimeResult.Failure(
+                    ExecutionError.retryable("RUNTIME_UNAVAILABLE", "vLLM connection refused"),
+                    RetryDisposition.NOT_ACCEPTED);
+        } catch (HttpTimeoutException e) {
+            return new RuntimeResult.Failure(
+                    ExecutionError.nonRetryable("RUNTIME_TIMEOUT", "vLLM stream timed out"),
+                    RetryDisposition.ACCEPTED_UNKNOWN);
+        } catch (IOException | java.io.UncheckedIOException e) {
+            return new RuntimeResult.Failure(
+                    ExecutionError.nonRetryable("RUNTIME_FAILED", "vLLM stream IO error"),
+                    RetryDisposition.ACCEPTED_UNKNOWN);
+        } catch (InterruptedException e) {
+            Thread.currentThread().interrupt();
+            return new RuntimeResult.Failure(
+                    ExecutionError.nonRetryable("RUNTIME_FAILED", "Interrupted"),
+                    RetryDisposition.ACCEPTED_UNKNOWN);
         }
     }
 

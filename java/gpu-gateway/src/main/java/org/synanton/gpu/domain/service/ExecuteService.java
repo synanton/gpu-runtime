@@ -51,8 +51,24 @@ public class ExecuteService implements ExecuteUseCase {
     private final ProviderRouter providerRouter;
     private final ProviderRuntimeRegistry providerRuntimeRegistry;
 
+    /** The one step unary and streaming execution differ in. */
+    @FunctionalInterface
+    private interface Dispatch {
+        ExecutionRuntime.RuntimeResult run(ExecutionRuntime runtime, RuntimeTarget target);
+    }
+
     @Override
     public Execution execute(ExecutionRequest request) {
+        return run(request, null);
+    }
+
+    @Override
+    public Execution executeStream(ExecutionRequest request, StreamListener listener) {
+        return run(request, java.util.Objects.requireNonNull(listener, "listener"));
+    }
+
+    private Execution run(ExecutionRequest request, StreamListener listener) {
+        boolean streaming = listener != null;
         admissionService.validateFields(request); // §21: invalid_request before anything else
         String requestHash = canonicalizer.canonicalize(request);
 
@@ -71,24 +87,36 @@ public class ExecuteService implements ExecuteUseCase {
         log.info("Routing decision: {}", decision);
         // Resolve the external runtime before admission too, so a missing runtime is a
         // denial — never an admitted execution left dangling in ACCEPTED.
-        ExecutionRuntime externalRuntime = decision.isLocal() ? null
+        ExecutionRuntime runtime = decision.isLocal() ? vllmRuntime
                 : providerRuntimeRegistry.get(decision.providerId())
                         .orElseThrow(() -> new RoutingDeniedException("provider_unavailable",
                                 "provider '" + decision.providerId() + "' has no runtime"));
+        if (streaming && (request.getOperation() != org.synanton.gpu.v1.Operation.SYNTHESIZE
+                || !runtime.supportsStreaming())) {
+            // §10.1: never silently fall back to unary
+            throw new RoutingDeniedException("capability_not_supported",
+                    "streaming is supported for SYNTHESIZE on streaming-capable runtimes only");
+        }
+        Dispatch dispatch = streaming
+                ? (rt, target) -> rt.executeStreaming(request, target, listener)
+                : (rt, target) -> rt.execute(request, target);
 
         // Admission path: serialized per-model inside a PostgreSQL transaction
         Execution admitted = executionAdmissionService.admitAndPersist(request, requestHash);
         if (admitted.state().isTerminal()) {
             return admitted; // Race: another thread completed it
         }
+        if (streaming) {
+            listener.onAdmitted(admitted.executionId());
+        }
 
         return decision.isLocal()
-                ? loadAndDispatchLocal(request, admitted)
-                : dispatchExternal(request, admitted, decision, externalRuntime);
+                ? loadAndDispatchLocal(request, admitted, dispatch)
+                : dispatchExternal(request, admitted, decision, runtime, dispatch);
     }
 
     /** Local (GPU-5) path: model load phase + vLLM dispatch. */
-    private Execution loadAndDispatchLocal(ExecutionRequest request, Execution admitted) {
+    private Execution loadAndDispatchLocal(ExecutionRequest request, Execution admitted, Dispatch dispatch) {
         String executionId = admitted.executionId();
 
         // ACCEPTED → QUEUED
@@ -131,7 +159,7 @@ public class ExecuteService implements ExecuteUseCase {
 
         HeartbeatManager.HeartbeatHandle heartbeat = heartbeatManager.start(executionId);
         try {
-            ExecutionRuntime.RuntimeResult result = vllmRuntime.execute(request, target);
+            ExecutionRuntime.RuntimeResult result = dispatch.run(vllmRuntime, target);
             return recordResult(executionId, result);
         } finally {
             heartbeat.stop();
@@ -145,7 +173,8 @@ public class ExecuteService implements ExecuteUseCase {
      * and restores the logical ID on every downstream body, including SSE chunks (P1.2).
      */
     private Execution dispatchExternal(ExecutionRequest request, Execution admitted,
-                                       RoutingDecision decision, ExecutionRuntime runtime) {
+                                       RoutingDecision decision, ExecutionRuntime runtime,
+                                       Dispatch dispatch) {
         String executionId = admitted.executionId();
 
         RuntimeTarget target = providerRuntimeRegistry.targetFor(decision);
@@ -157,7 +186,7 @@ public class ExecuteService implements ExecuteUseCase {
 
         HeartbeatManager.HeartbeatHandle heartbeat = heartbeatManager.start(executionId);
         try {
-            ExecutionRuntime.RuntimeResult result = runtime.execute(request, target);
+            ExecutionRuntime.RuntimeResult result = dispatch.run(runtime, target);
             return recordResult(executionId, result);
         } finally {
             heartbeat.stop();

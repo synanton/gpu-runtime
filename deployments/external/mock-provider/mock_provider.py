@@ -67,6 +67,8 @@ class Handler(BaseHTTPRequestHandler):
         self.send_header("Content-Type", "text/event-stream")
         self.send_header("Cache-Control", "no-cache")
         self.send_header("x-request-id", rid)
+        self.send_header("Connection", "close")  # SSE has no Content-Length: end by closing
+        self.close_connection = True
         self.end_headers()
         for name, payload in events:
             if name:

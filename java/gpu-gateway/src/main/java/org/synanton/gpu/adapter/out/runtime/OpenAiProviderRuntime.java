@@ -13,10 +13,7 @@ import org.synanton.gpu.v1.ExecutionRequest;
 import org.synanton.gpu.v1.Operation;
 import lombok.extern.slf4j.Slf4j;
 
-import java.io.BufferedReader;
 import java.io.IOException;
-import java.io.InputStream;
-import java.io.InputStreamReader;
 import java.net.ConnectException;
 import java.net.URI;
 import java.net.http.HttpClient;
@@ -128,19 +125,52 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
                                           StreamChunkSink sink) {
         long startMs = System.currentTimeMillis();
         try {
-            byte[] payload = rewritePayloadForProvider(request, target, true);
+            boolean clientWantsUsage;
+            byte[] payload;
+            try {
+                JsonNode original = objectMapper.readTree(request.getPayload().toByteArray());
+                clientWantsUsage = SseRelay.clientRequestedUsage(original);
+                payload = rewritePayloadForProvider(request, target, true);
+            } catch (IOException e) {
+                throw new ModelRewriteException("payload is not valid JSON");
+            }
             HttpRequest httpRequest = buildRequest(target, request.getOperation(), payload, true);
 
             circuitBreaker.beforeCall();
-            HttpResponse<InputStream> response =
-                    httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofInputStream());
+            HttpResponse<java.util.stream.Stream<String>> response =
+                    httpClient.send(httpRequest, HttpResponse.BodyHandlers.ofLines());
 
             if (response.statusCode() != 200) {
-                // No frame has been emitted: safe to fail like a unary call.
-                return parseUnaryResponse(readDiscarding(response), System.currentTimeMillis() - startMs, request);
+                // No frame has been emitted: safe to fail exactly like a unary call.
+                String body;
+                try (var lines = response.body()) {
+                    body = String.join("\n", lines.toList());
+                }
+                return parseUnaryResponse(new StringifyingResponse<>(response, body),
+                        System.currentTimeMillis() - startMs, request);
             }
 
-            return relayStream(response, request, sink, startMs);
+            SseRelay.Outcome outcome;
+            try (var lines = response.body()) {
+                outcome = SseRelay.relay(lines, request.getModel(), clientWantsUsage,
+                        objectMapper, sink, providerId, startMs, requestTimeout);
+            }
+            if (outcome.timedOut()) {
+                circuitBreaker.onFailure();
+                return failure("upstream_provider_timeout", "provider stream exceeded the deadline",
+                        false, RetryDisposition.ACCEPTED_UNKNOWN);
+            }
+            if (!outcome.sawDone()) {
+                // §10.1: the terminal marker is the contract; a stream without it broke mid-flight.
+                circuitBreaker.onFailure();
+                return new RuntimeResult.Failure(
+                        ExecutionError.nonRetryable("upstream_provider_error",
+                                "provider stream ended without [DONE]"),
+                        RetryDisposition.COMPLETED_UNKNOWN);
+            }
+            circuitBreaker.onSuccess();
+            // usage == null → authoritative usage unavailable: leave it unset (§10.2), never zero
+            return new RuntimeResult.Success(outcome.usage(), new byte[0]);
 
         } catch (CircuitBreaker.CircuitOpenException e) {
             return failure("circuit_open", "provider '" + providerId + "' circuit is open",
@@ -153,7 +183,7 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             circuitBreaker.onFailure();
             return failure("upstream_provider_timeout", "provider stream timed out", false,
                     RetryDisposition.ACCEPTED_UNKNOWN);
-        } catch (IOException e) {
+        } catch (IOException | java.io.UncheckedIOException e) {
             circuitBreaker.onFailure();
             return failure("provider_unavailable", "provider IO error", false,
                     RetryDisposition.ACCEPTED_UNKNOWN);
@@ -163,61 +193,6 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
         } catch (ModelRewriteException e) {
             return failure("invalid_request", e.getMessage(), false, RetryDisposition.DEFINITELY_FAILED);
         }
-    }
-
-    private RuntimeResult relayStream(HttpResponse<InputStream> response,
-                                      ExecutionRequest request,
-                                      StreamChunkSink sink,
-                                      long startMs) throws IOException {
-        String logicalModelId = request.getModel();
-        ExecutionUsage usage = null;
-        boolean sawDone = false;
-
-        try (BufferedReader reader = new BufferedReader(
-                new InputStreamReader(response.body(), StandardCharsets.UTF_8))) {
-            String line;
-            while ((line = reader.readLine()) != null) {
-                if (!line.startsWith("data:")) {
-                    continue; // comments/keep-alives are not forwarded
-                }
-                String data = line.substring(5).trim();
-                if ("[DONE]".equals(data)) {
-                    if (!sawDone) {
-                        sawDone = true;
-                        sink.onChunk("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8));
-                    }
-                    continue; // suppress duplicate [DONE] frames (§10: exactly once)
-                }
-                JsonNode chunk;
-                try {
-                    chunk = objectMapper.readTree(data);
-                } catch (Exception e) {
-                    log.warn("provider {} sent a non-JSON SSE frame; dropping it", providerId);
-                    continue;
-                }
-                if (chunk.has("usage") && !chunk.path("usage").isNull()) {
-                    usage = extractUsage(chunk, System.currentTimeMillis() - startMs);
-                }
-                restoreLogicalModelId(chunk, logicalModelId);
-                sink.onChunk(("data: " + objectMapper.writeValueAsString(chunk) + "\n\n")
-                        .getBytes(StandardCharsets.UTF_8));
-            }
-        }
-
-        if (!sawDone) {
-            // §10: the terminal frame is the contract; a stream without it broke mid-flight.
-            circuitBreaker.onFailure();
-            return new RuntimeResult.Failure(
-                    ExecutionError.nonRetryable("upstream_provider_error",
-                            "provider stream ended without [DONE]"),
-                    RetryDisposition.COMPLETED_UNKNOWN);
-        }
-        circuitBreaker.onSuccess();
-        long durationMs = System.currentTimeMillis() - startMs;
-        return new RuntimeResult.Success(
-                usage != null ? usage
-                        : new ExecutionUsage(0, 0, durationMs / 1000.0, providerId),
-                new byte[0]);
     }
 
     // ─── cancel / ping ───────────────────────────────────────────────────────
@@ -289,7 +264,9 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             // decision (RuntimeTarget.providerModelId), never the logical ID.
             object.put("model", providerModelIdOf(request, target));
             if (streaming) {
-                object.put("stream", true); // never clobber stream_options (e.g. include_usage)
+                // §10.3: always request authoritative usage upstream; SseRelay forwards the
+                // usage chunk downstream only if the client asked for it
+                SseRelay.requestStreamingWithUsage(object);
             }
             return objectMapper.writeValueAsBytes(object);
         } catch (ModelRewriteException e) {
@@ -374,11 +351,6 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
         String lower = body.toLowerCase();
         return lower.contains("not support") || lower.contains("unsupported")
                 || lower.contains("capability");
-    }
-
-    private HttpResponse<String> readDiscarding(HttpResponse<InputStream> response) throws IOException {
-        byte[] body = response.body().readAllBytes();
-        return new StringifyingResponse<>(response, new String(body, StandardCharsets.UTF_8));
     }
 
     private RuntimeResult failure(String code, String message, boolean retryable,

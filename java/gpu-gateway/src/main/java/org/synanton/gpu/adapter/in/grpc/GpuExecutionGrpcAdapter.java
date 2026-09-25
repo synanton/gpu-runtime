@@ -58,6 +58,67 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
     }
 
     /**
+     * {@code ExecuteStream} (Deployment Plan §10.1): zero or more {@code data} chunks — one
+     * OpenAI-compatible chunk JSON each, logical model ID — then exactly one
+     * {@code terminal}. The runtime's {@code [DONE]} is consumed here: the terminal message
+     * replaces it. If the client disconnects, remaining frames are dropped but the
+     * execution runs to completion (same semantics as Execute, per the proto contract).
+     */
+    @Override
+    public void executeStream(ExecutionRequest request,
+                              StreamObserver<org.synanton.gpu.v1.ExecutionChunk> observer) {
+        log.info("ExecuteStream: request_id={} model={} tenant={}",
+                request.getRequestId(), request.getModel(), request.getTenantId());
+        var serverObserver = observer instanceof io.grpc.stub.ServerCallStreamObserver<?> so ? so : null;
+        String[] executionId = {""};
+        ExecuteUseCase.StreamListener listener = new ExecuteUseCase.StreamListener() {
+            @Override
+            public void onAdmitted(String id) {
+                executionId[0] = id;
+            }
+
+            @Override
+            public void onChunk(byte[] frame) {
+                if (serverObserver != null && serverObserver.isCancelled()) {
+                    return;
+                }
+                byte[] data = sseData(frame);
+                if (data == null) {
+                    return; // [DONE] — replaced by the terminal message
+                }
+                observer.onNext(org.synanton.gpu.v1.ExecutionChunk.newBuilder()
+                        .setRequestId(request.getRequestId())
+                        .setExecutionId(executionId[0])
+                        .setData(com.google.protobuf.ByteString.copyFrom(data))
+                        .build());
+            }
+        };
+        try {
+            Execution execution = executeUseCase.executeStream(request, listener);
+            if (serverObserver != null && serverObserver.isCancelled()) {
+                return;
+            }
+            observer.onNext(org.synanton.gpu.v1.ExecutionChunk.newBuilder()
+                    .setRequestId(execution.requestId())
+                    .setExecutionId(execution.executionId())
+                    .setTerminal(responseMapper.toExecutionResponse(execution))
+                    .build());
+            observer.onCompleted();
+        } catch (Exception e) {
+            observer.onError(toDenial(e, request.getRequestId()));
+        }
+    }
+
+    /** SSE frame {@code data: <json>\n\n} → JSON bytes; {@code null} for {@code [DONE]}. */
+    static byte[] sseData(byte[] frame) {
+        String text = new String(frame, java.nio.charset.StandardCharsets.UTF_8).strip();
+        if (text.startsWith("data:")) {
+            text = text.substring(5).strip();
+        }
+        return "[DONE]".equals(text) ? null : text.getBytes(java.nio.charset.StandardCharsets.UTF_8);
+    }
+
+    /**
      * Maps a pre-execution denial to a gRPC status carrying the canonical code
      * (Deployment Plan §16.2) in the {@code x-synanton-error-code} trailer and as the
      * description prefix. Shared by Execute and ExecuteStream so both RPCs report

@@ -35,6 +35,32 @@ public interface ExecutionRuntime {
      */
     RuntimeStatus ping(String executionId, RuntimeTarget target);
 
+    // ─── Streaming (PR #15 P1.2: unary and streaming are distinct operations) ─
+
+    /** Whether {@link #executeStreaming} is implemented. Checked before admission. */
+    default boolean supportsStreaming() {
+        return false;
+    }
+
+    /**
+     * Streaming execution: each normalized SSE frame ({@code data: <chunk>\n\n}, logical
+     * model ID restored) is delivered to {@code sink} as it arrives; {@code data: [DONE]}
+     * exactly once at the end. Returns the terminal result (authoritative usage, empty
+     * result body). Runtimes without streaming throw {@link UnsupportedOperationException};
+     * callers must check {@link #supportsStreaming()} first and never fall back to unary.
+     */
+    default RuntimeResult executeStreaming(ExecutionRequest request, RuntimeTarget target,
+                                           StreamChunkSink sink) {
+        throw new UnsupportedOperationException(
+                getClass().getSimpleName() + " does not support streaming execution");
+    }
+
+    /** Downstream consumer of normalized SSE frames. */
+    @FunctionalInterface
+    interface StreamChunkSink {
+        void onChunk(byte[] sseFrame);
+    }
+
     // ─── Result types ────────────────────────────────────────────────────────
 
     sealed interface RuntimeResult {

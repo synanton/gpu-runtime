@@ -67,6 +67,28 @@ out="$(call Execute "$(request "$RUN-rerank" synanton-mock-reranker RERANK \
   '{"model":"synanton-mock-reranker","query":"q","documents":["a","b"]}')")"
 [[ "$(field 'r.get("state")' <<<"$out")" == "SUCCESS" ]] && ok "rerank (configured) → SUCCESS" || bad "rerank" "$out"
 
+echo "== streaming (ExecuteStream, Plan §10): data chunks, exactly one terminal, include_usage"
+out="$(call ExecuteStream "$(request "$RUN-stream" synanton-mock-chat SYNTHESIZE \
+  '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"hi"}],"stream_options":{"include_usage":true}}')")"
+verdict="$(python3 -c '
+import sys, json, base64
+dec = json.JSONDecoder(); raw = sys.stdin.read().strip(); msgs = []; i = 0
+while i < len(raw):
+    while i < len(raw) and raw[i].isspace(): i += 1
+    if i >= len(raw): break
+    obj, i = dec.raw_decode(raw, i); msgs.append(obj)
+data = [json.loads(base64.b64decode(m["data"])) for m in msgs if "data" in m]
+terms = [m["terminal"] for m in msgs if "terminal" in m]
+ok = (len(data) >= 1 and len(terms) == 1 and "terminal" in msgs[-1]
+      and all(d.get("model") == "synanton-mock-chat" for d in data if "model" in d)
+      and not any("mock-chat-1" in json.dumps(d) for d in data)
+      and any(d.get("usage") for d in data)
+      and terms[0].get("state") == "SUCCESS" and int(terms[0].get("usage", {}).get("inputTokens", "0")) > 0)
+print("OK" if ok else "BAD data=%d terms=%d" % (len(data), len(terms)))' <<<"$out")"
+[[ "$verdict" == OK ]] && ok "stream: chunks carry logical ID, usage chunk, exactly one terminal with usage" || bad "stream" "$verdict $out"
+out="$(GRPCURL_FLAGS="-plaintext -v" call ExecuteStream "$(request "$RUN-stream-embed" synanton-mock-embedding EMBED '{"input":"x"}')")"
+[[ "$out" == *capability_not_supported* ]] && ok "EMBED on ExecuteStream → capability_not_supported" || bad "non-streamable op" "$out"
+
 echo "== negative paths (canonical denials, fail closed)"
 out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-nope" no-such-model SYNTHESIZE '{"model":"no-such-model"}')")"
 [[ "$out" == *NotFound* && "$out" == *model_not_found* ]] && ok "unknown model → NOT_FOUND model_not_found" || bad "unknown model" "$out"
