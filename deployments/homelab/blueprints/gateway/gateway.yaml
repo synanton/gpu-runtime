@@ -188,3 +188,21 @@ spec:
     - { name: metrics, port: 8091, targetPort: 8091 }
     - { name: jwks, port: 8090, targetPort: 8090 }   # Envoy remote_jwks (NetworkPolicy: Envoy only)
   type: ClusterIP
+---
+# External gRPC access for a Platform outside the cluster, e.g. the retrieval benchmark on the
+# workstation (benchmark plan §6 Phase B1-K). mTLS still authenticates every call, and the
+# NetworkPolicy "gateway" limits the source addresses. externalTrafficPolicy: Local keeps the
+# client source IP, so that ipBlock rule works; connect to the Gateway's node (node1).
+# Clients must set the TLS authority to a server-cert SAN: GPU_TLS_AUTHORITY=gpu-gateway.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-gateway-external
+  namespace: gpu-plane
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector:
+    app: gpu-gateway
+  ports:
+    - { name: grpc, port: 9090, targetPort: 9090, nodePort: 30990 }

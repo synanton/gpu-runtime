@@ -41,9 +41,14 @@ spec:
       app: gpu-gateway
   policyTypes: [Ingress, Egress]
   ingress:
-    # gRPC synanton.gpu.v1 from the Platform, outside the namespace (Plan v3.0.0 §4).
-    # Plaintext until mTLS (T-K8S-7/8): this rule is the only exposure control.
-    - ports:
+    # gRPC synanton.gpu.v1 from the Platform (Plan v3.0.0 §4). mTLS authenticates every call.
+    # Sources: pods in any namespace (in-cluster Platform), and the workstation that runs the
+    # Platform / retrieval benchmark via NodePort gpu-gateway-external (:30990).
+    # Adjust the ipBlock to your Platform host.
+    - from:
+        - namespaceSelector: {}
+        - ipBlock: { cidr: 192.168.10.37/32 }   # workstation M70Q (benchmark plan B1-K)
+      ports:
         - { protocol: TCP, port: 9090 }
     # JWKS (T-K8S-6a) from Envoy only
     - from:

@@ -137,3 +137,18 @@ spec:
     - { name: metrics, port: 8091, targetPort: 8091 }
     - { name: jwks, port: {{ .Values.gateway.jwksPort }}, targetPort: {{ .Values.gateway.jwksPort }} }
   type: ClusterIP
+{{- if .Values.gateway.external.enabled }}
+---
+# External gRPC (benchmark plan B1-K): mTLS still applies; NetworkPolicy limits sources;
+# externalTrafficPolicy Local keeps the client IP for that ipBlock. Connect to the Gateway's node.
+apiVersion: v1
+kind: Service
+metadata:
+  name: gpu-gateway-external
+spec:
+  type: NodePort
+  externalTrafficPolicy: Local
+  selector: { app: gpu-gateway }
+  ports:
+    - { name: grpc, port: 9090, targetPort: 9090, nodePort: {{ .Values.gateway.external.nodePort }} }
+{{- end }}
