@@ -31,7 +31,7 @@
 
 ```text
 Synanton Platform
-  | gRPC synanton.gpu.v1 (Deployment Plan v3.0.0 §4; mTLS = T-K8S-7/8, pending)
+  | gRPC synanton.gpu.v1 over mTLS (Deployment Plan §4, §13; doc/GPU Plane mTLS Setup.md)
   v
 Gateway (node1, gRPC :9090, metrics :8091)
   | ES256 execution JWT (spec §12)
@@ -268,9 +268,9 @@ Each phase's exit criteria must pass before moving on.
 | 3 | T-K8S-5, T-K8S-10 | `./scripts/deploy.sh inference` | All 3 inference pods Running (tei-embedding on node1, vllm-reranker on node2, vllm-synthesis on node3); smoke tests pass (§8.1–8.3) |
 | 4 | T-K8S-4, T-K8S-1a | `./scripts/deploy.sh gateway` — mode `local-only`, model registry → 3 inference services | Gateway ready; startup validation fails closed on bad config; `GetModels` lists the 3 Synanton IDs |
 | 5 | T-K8S-6a, 6b, 6 | ES256 keypair → Secret; `./scripts/deploy.sh envoy` | Unsigned request → 401; Gateway-signed request reaches the backends; direct backend Service access still works only from Envoy (enforced in phase 7) |
-| 6 | T-K8S-8 | Caller principal validation (mTLS) — **pending ticket**; API keys were removed from the contract (Plan v3.0.0 §13) | Until then the gRPC port is reachable only via NetworkPolicy (phase 7) |
+| 6 | T-K8S-7, 8 | mTLS + tenant authorization: create the `gpu-gateway-tls` Secret from a self-signed PKI (`doc/GPU Plane mTLS Setup.md` §5); principal `synanton-platform` | Plaintext and foreign-CA clients refused; `tenant_not_allowed` for unauthorized tenants |
 | 7 | T-K8S-11, 12 | `./scripts/deploy.sh policies` | Direct client→backend denied; logs contain no prompts/completions |
-| 8 | T-K8S-7, 9, 9a | gRPC transport security (mTLS — pending ticket); Prometheus scrape of Gateway :8091 | `gpu_gateway_*` metrics visible |
+| 8 | T-K8S-9, 9a | Prometheus scrape of Gateway :8091 (`/actuator/prometheus`) | `gpu_gateway_*` metrics visible |
 | 9 | T-K8S-13, 14, 15a | Idempotency retention 24 h; run acceptance suite (§9); proto contract mirror (`scripts/verify-gpu-contract-mirror.sh`) | §24 suite green against the packaged deployment |
 
 Secrets are created imperatively and never committed (spec §12/§13):
@@ -280,6 +280,12 @@ Secrets are created imperatively and never committed (spec §12/§13):
 openssl ecparam -name prime256v1 -genkey -noout -out es256-current.pem
 kubectl -n gpu-plane create secret generic gpu-gateway-jwt-keys \
   --from-file=current=es256-current.pem
+
+# Phase 6 — gRPC mTLS: self-signed PKI (doc/GPU Plane mTLS Setup.md); keep ca.key offline
+deployments/external/scripts/gen-certs.sh /tmp/gpu5-pki synanton-platform
+kubectl -n gpu-plane create secret generic gpu-gateway-tls \
+  --from-file=server.crt=/tmp/gpu5-pki/server.crt --from-file=server.key=/tmp/gpu5-pki/server.key \
+  --from-file=ca.crt=/tmp/gpu5-pki/ca.crt
 
 # Phase 2 — PostgreSQL credentials
 kubectl -n gpu-plane create secret generic gpu-postgres-cred \
@@ -296,7 +302,8 @@ Two levels, complementary:
 
 ```bash
 kubectl -n gpu-plane port-forward svc/gpu-gateway 9090:9090
-tools/gpu-grpc-call.sh localhost:9090 GetModels '{"operation":"SYNTHESIZE"}'
+GPU_GRPC_CERT_DIR=/tmp/gpu5-pki GPU_GRPC_CLIENT=synanton-platform \
+  tools/gpu-grpc-call.sh localhost:9090 GetModels '{"operation":"SYNTHESIZE"}'
 ./scripts/smoke-test.sh gateway          # same call via port-forward
 ```
 

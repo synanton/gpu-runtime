@@ -593,11 +593,11 @@ The only client of the GPU Plane is the Synanton Platform, as a service principa
 
 The contract-level authentication mechanism is **mTLS** on the gRPC channel (T-K8S-7 transport security, T-K8S-8 principal validation). `ErrorReason.UNAUTHORIZED` is reserved for mTLS failures.
 
-**Implementation state (revision 3.0.0):** the current build serves **plaintext gRPC** and does not validate a principal. Until T-K8S-7/8 land, the gRPC port MUST be reachable only from the platform's network — Kubernetes NetworkPolicy (GPU-5, §19) or the private compose network (GPU-7) — and MUST NOT be published to untrusted networks.
+**Implementation state:** implemented. `gpu-gateway.security.mode: mtls` (the default) requires a client certificate signed by the configured CA; the certificate CN is the principal, mapped in `gpu-gateway.security.principals.<cn>.tenants` to the tenants it may assert. Missing/foreign certificate → handshake refused; unregistered CN → `UNAUTHENTICATED` (`unauthenticated`); unauthorized `tenant_id` → `PERMISSION_DENIED` (`tenant_not_allowed`); another tenant's execution on `GetStatus`/`Cancel` → not found. `insecure-plaintext` exists for tests only. Setup with a self-signed PKI: `doc/GPU Plane mTLS Setup.md`.
 
 ## 13.2 Tenant Identity
 
-`ExecutionRequest.tenant_id` is a tenant **assertion**, not a credential. With mTLS in place, the Gateway validates it against the authenticated principal's permitted tenant scope (`TENANT_NOT_ALLOWED` on mismatch). Budget and quota controls key on `tenant_id`.
+`ExecutionRequest.tenant_id` is a tenant **assertion**, not a credential. The Gateway validates it against the authenticated principal's permitted tenants (`tenant_not_allowed` on mismatch) before any routing, budget or admission step. Budget and quota controls key on `tenant_id`.
 
 API keys (`sk-syn-...`, `syn_live_...`), `OpenAI-Organization` / `OpenAI-Project` headers and API-key peppers are **not part of the contract** (§4.1); end-user and project identity is resolved by the Platform (Identity 1.29) before it calls the GPU Plane.
 
@@ -646,6 +646,8 @@ Errors reach the client on exactly one of two surfaces:
 
 | Condition | Surface | gRPC status / `reason` | `code` |
 | --- | --- | --- | --- |
+| No/unregistered client principal (mTLS) | denial | `UNAUTHENTICATED` | `unauthenticated` |
+| Principal may not act for `tenant_id` | denial | `PERMISSION_DENIED` | `tenant_not_allowed` |
 | Field validation failure (incl. request ID) | denial | `INVALID_ARGUMENT` | `invalid_request` |
 | Same `request_id`, different request | denial | `INVALID_ARGUMENT` | `idempotency_conflict` |
 | Model not in catalog/registry | denial | `NOT_FOUND` | `model_not_found` |

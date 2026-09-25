@@ -11,6 +11,9 @@
 #
 # Secrets (created imperatively, never committed — plan §7):
 #   gpu-postgres-cred     shared with the postgres Deployment
+#   gpu-gateway-tls       server.crt, server.key, ca.crt — self-signed PKI from
+#                         deployments/external/scripts/gen-certs.sh (doc/GPU Plane mTLS Setup.md).
+#                         Required: security.mode=mtls fails closed without it.
 #   gpu-gateway-jwt-keys  RESERVED for T-K8S-6a (execution JWT signing, pending).
 #                         Mounted optionally; nothing reads it yet. Until 6a lands
 #                         Envoy's jwt_authn rejects Gateway→Envoy calls (fail closed).
@@ -22,6 +25,16 @@ metadata:
 data:
   gateway-local.yaml: |
     gpu-gateway:
+      security:                        # mTLS + tenant authorization (Plan §13; doc/GPU Plane mTLS Setup.md)
+        mode: mtls
+        tls:
+          cert-chain: /etc/gpu-gateway/tls/server.crt
+          private-key: /etc/gpu-gateway/tls/server.key
+          client-ca: /etc/gpu-gateway/tls/ca.crt
+        principals:
+          synanton-platform:           # client-certificate CN of the Platform
+            tenants: ["*"]
+            roles: [admin]
       dispatch:
         strategy: direct
         vllm-endpoint: http://envoy:8080
@@ -120,6 +133,9 @@ spec:
             - name: config
               mountPath: /etc/gpu-gateway/config
               readOnly: true
+            - name: tls
+              mountPath: /etc/gpu-gateway/tls
+              readOnly: true
             - name: jwt-keys # reserved for T-K8S-6a
               mountPath: /etc/gpu-gateway/keys
               readOnly: true
@@ -140,6 +156,10 @@ spec:
         - name: config
           configMap:
             name: gpu-gateway-config
+        - name: tls
+          secret:
+            secretName: gpu-gateway-tls
+            defaultMode: 0400
         - name: jwt-keys
           secret:
             secretName: gpu-gateway-jwt-keys

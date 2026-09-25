@@ -4,7 +4,8 @@
 #
 # Run from deployments/external/ with the compose stack up:
 #   docker compose up -d && ./scripts/smoke-test.sh
-# Requires: grpcurl (https://github.com/fullstorydev/grpcurl/releases), python3.
+# Requires: grpcurl (https://github.com/fullstorydev/grpcurl/releases), python3, and the
+# self-signed dev PKI (./scripts/gen-certs.sh) — the gateway only speaks mTLS.
 # Model IDs are the LOGICAL catalog IDs from config/gateway-external.yaml. The mock
 # runs with MOCK_STRICT_MODELS=1: it 404s any model except the provider IDs
 # (mock-*-1), so each SUCCESS proves the logical → provider rewrite upstream, and the
@@ -88,17 +89,17 @@ ok = (len(data) >= 1 and len(terms) == 1 and "terminal" in msgs[-1]
       and terms[0].get("state") == "SUCCESS" and int(terms[0].get("usage", {}).get("inputTokens", "0")) > 0)
 print("OK" if ok else "BAD data=%d terms=%d" % (len(data), len(terms)))' <<<"$out")"
 [[ "$verdict" == OK ]] && ok "stream: chunks carry logical ID, usage chunk, exactly one terminal with usage" || bad "stream" "$verdict $out"
-out="$(GRPCURL_FLAGS="-plaintext -v" call ExecuteStream "$(request "$RUN-stream-embed" synanton-mock-embedding EMBED '{"input":"x"}')")"
+out="$(GRPCURL_EXTRA="-v" call ExecuteStream "$(request "$RUN-stream-embed" synanton-mock-embedding EMBED '{"input":"x"}')")"
 [[ "$out" == *capability_not_supported* ]] && ok "EMBED on ExecuteStream → capability_not_supported" || bad "non-streamable op" "$out"
 
 echo "== negative paths (canonical denials, fail closed)"
-out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-nope" no-such-model SYNTHESIZE '{"model":"no-such-model"}')")"
+out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-nope" no-such-model SYNTHESIZE '{"model":"no-such-model"}')")"
 [[ "$out" == *NotFound* && "$out" == *model_not_found* ]] && ok "unknown model → NOT_FOUND model_not_found" || bad "unknown model" "$out"
 
-out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-cap" synanton-mock-chat RERANK '{"query":"q","documents":["a"]}')")"
+out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-cap" synanton-mock-chat RERANK '{"query":"q","documents":["a"]}')")"
 [[ "$out" == *capability_not_supported* ]] && ok "chat model on RERANK → capability_not_supported" || bad "capability gap" "$out"
 
-out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-local" synanton-mock-chat SYNTHESIZE '{"model":"x"}' | sed 's/}$/,"provider":"LOCAL"}/')")"
+out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-local" synanton-mock-chat SYNTHESIZE '{"model":"x"}' | sed 's/}$/,"provider":"LOCAL"}/')")"
 [[ "$out" == *PermissionDenied* && "$out" == *no_local_fallback* ]] && ok "LOCAL request in external mode → no_local_fallback" || bad "no local fallback" "$out"
 
 req="$(request "$RUN-idem" synanton-mock-chat SYNTHESIZE '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"a"}]}')"
@@ -124,20 +125,27 @@ if [[ "${SMOKE_REAL_PROVIDER:-0}" == "1" ]]; then
     '{"model":"synanton-free-embedding","input":"hello"}')")"
   [[ "$(field 'len(json.loads(res)["data"][0]["embedding"]) if res else 0' <<<"$out")" == "2048" ]] \
     && ok "real embeddings → 2048-dim vector" || bad "real embeddings" "$out"
-  out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-real-rerank" synanton-free-chat RERANK '{"query":"q","documents":["a"]}')")"
+  out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-real-rerank" synanton-free-chat RERANK '{"query":"q","documents":["a"]}')")"
   [[ "$out" == *capability_not_supported* ]] && ok "real arm has no rerank → capability_not_supported" || bad "real rerank gap" "$out"
 fi
 
+echo "== caller authentication and tenant authorization (mTLS, Plan §13)"
+out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-tenant" synanton-mock-chat SYNTHESIZE '{"messages":[]}' someone-elses-tenant)")"
+[[ "$out" == *PermissionDenied* && "$out" == *tenant_not_allowed* ]] \
+  && ok "principal asserting another tenant → tenant_not_allowed" || bad "tenant authorization" "$out"
+out="$(GPU_GRPC_PLAINTEXT=1 call GetModels '{"operation":"SYNTHESIZE"}')"
+[[ "$out" != *synanton-mock-chat* ]] && ok "plaintext (no client certificate) is refused" || bad "plaintext accepted" "$out"
+
 echo "== GPU-7 controls (sensitivity, budget; fail closed)"
-out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-sens" synanton-mock-chat-sensitive SYNTHESIZE '{"messages":[]}')")"
+out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-sens" synanton-mock-chat-sensitive SYNTHESIZE '{"messages":[]}')")"
 [[ "$out" == *PermissionDenied* && "$out" == *sensitive_model_external_blocked* ]] \
   && ok "sensitive-tagged model → sensitive_model_external_blocked" || bad "sensitive model" "$out"
-out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-pii" synanton-mock-chat SYNTHESIZE '{"messages":[]}' smoke-tenant '["pii"]')")"
+out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-pii" synanton-mock-chat SYNTHESIZE '{"messages":[]}' smoke-tenant '["pii"]')")"
 [[ "$out" == *sensitive_model_external_blocked* ]] && ok "request data_tags [pii] → external routing denied" || bad "pii data tag" "$out"
 # smoke-budget-tenant has a 0.000001 USD/day budget: exhausted by at most one mock call
 denied=""
 for n in 1 2; do
-  out="$(GRPCURL_FLAGS="-plaintext -v" call Execute "$(request "$RUN-budget-$n" synanton-mock-chat SYNTHESIZE \
+  out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-budget-$n" synanton-mock-chat SYNTHESIZE \
     '{"model":"synanton-mock-chat","messages":[{"role":"user","content":"hi"}]}' smoke-budget-tenant)")"
   [[ "$out" == *ResourceExhausted* && "$out" == *budget_exceeded* ]] && { denied=yes; break; }
 done

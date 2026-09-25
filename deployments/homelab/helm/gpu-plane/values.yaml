@@ -57,6 +57,7 @@ models:
 
 gateway:
   strategy: direct # GPU-5 local path; unknown strategies fail startup (Plan §5.5)
+  platformPrincipal: synanton-platform # client-certificate CN of the Platform (mTLS)
   vllmEndpoint: http://envoy:8080 # Envoy routes by path to the three backends
   jdbcUrl: jdbc:postgresql://postgres:5432/gpu_plane
   terminationGracePeriodSeconds: 45 # §31
@@ -80,4 +81,5 @@ postgres:
 
 secrets:
   postgresCred: gpu-postgres-cred # created imperatively (plan §7), never committed
+  gatewayTls: gpu-gateway-tls # server.crt/server.key/ca.crt (doc/GPU Plane mTLS Setup.md)
   gatewayJwtKeys: gpu-gateway-jwt-keys # reserved for T-K8S-6a (mounted optionally)

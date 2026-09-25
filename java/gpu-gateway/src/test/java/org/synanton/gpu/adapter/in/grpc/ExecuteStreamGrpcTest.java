@@ -43,7 +43,8 @@ class ExecuteStreamGrpcTest {
         server = InProcessServerBuilder.forName(name).directExecutor()
                 .addService(new GpuExecutionGrpcAdapter(execute, mock(CancelUseCase.class),
                         mock(GetStatusUseCase.class), mock(GetCapacityUseCase.class),
-                        mock(GetModelsUseCase.class), new ResponseMapper()))
+                        mock(GetModelsUseCase.class), new ResponseMapper(),
+                        new CallerAuthorization(plaintextProperties())))
                 .build().start();
         channel = InProcessChannelBuilder.forName(name).directExecutor().build();
     }
@@ -52,6 +53,12 @@ class ExecuteStreamGrpcTest {
     void tearDown() {
         channel.shutdownNow();
         server.shutdownNow();
+    }
+
+    private static org.synanton.gpu.config.GpuGatewayProperties plaintextProperties() {
+        var p = new org.synanton.gpu.config.GpuGatewayProperties();
+        p.getSecurity().setMode("insecure-plaintext");
+        return p;
     }
 
     private static ExecutionRequest request() {

@@ -33,6 +33,11 @@ public class GetStatusService implements GetStatusUseCase {
     private final ModelRepository modelRepository;
 
     @Override
+    public Optional<String> tenantOf(String executionId) {
+        return executionRepository.findByExecutionId(executionId).map(Execution::tenantId);
+    }
+
+    @Override
     public Optional<Execution> getStatus(String executionId) {
         Optional<Execution> found = executionRepository.findByExecutionId(executionId);
         if (found.isEmpty()) {

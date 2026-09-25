@@ -4,6 +4,7 @@
 # API: gRPC synanton.gpu.v1 on localhost:9090 (Deployment Plan v3.0.0 §4).
 # Prereq (repo root):  ./gradlew :java:gpu-gateway:bootJar
 # Then here:           cp .env.example .env  (fill in)
+#                      ./scripts/gen-certs.sh          # self-signed dev PKI → ./certs
 #                      docker compose up -d --build && ./scripts/smoke-test.sh
 name: gpu-7-external
 
@@ -71,9 +72,11 @@ services:
       OPENAI_PROVIDER_ENABLED: ${OPENAI_PROVIDER_ENABLED:-false}
     volumes:
       - ./config/gateway-external.yaml:/etc/gpu-gateway/gateway-external.yaml:ro
+      # self-signed dev PKI: ./scripts/gen-certs.sh (git-ignored; required — mTLS fails closed)
+      - ./certs:/etc/gpu-gateway/tls:ro
     ports:
-      # gRPC synanton.gpu.v1 — plaintext until mTLS (T-K8S-7/8): bound to localhost so
-      # it is never published to untrusted networks (Plan v3.0.0 §13.1)
+      # gRPC synanton.gpu.v1 over mTLS (Plan §13.1). Bound to localhost as defence in
+      # depth; to serve remote platform hosts, publish on an interface of your choice.
       - "127.0.0.1:9090:9090"
       - "127.0.0.1:8091:8091" # actuator health/metrics
     restart: unless-stopped

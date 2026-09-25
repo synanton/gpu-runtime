@@ -9,6 +9,16 @@ metadata:
 data:
   gateway-local.yaml: |
     gpu-gateway:
+      security:
+        mode: mtls
+        tls:
+          cert-chain: /etc/gpu-gateway/tls/server.crt
+          private-key: /etc/gpu-gateway/tls/server.key
+          client-ca: /etc/gpu-gateway/tls/ca.crt
+        principals:
+          {{ .Values.gateway.platformPrincipal }}:
+            tenants: ["*"]
+            roles: [admin]
       dispatch:
         strategy: {{ .Values.gateway.strategy }}
         vllm-endpoint: {{ .Values.gateway.vllmEndpoint }}
@@ -88,6 +98,7 @@ spec:
             limits: { cpu: "4", memory: 4Gi }
           volumeMounts:
             - { name: config, mountPath: /etc/gpu-gateway/config, readOnly: true }
+            - { name: tls, mountPath: /etc/gpu-gateway/tls, readOnly: true }
             - { name: jwt-keys, mountPath: /etc/gpu-gateway/keys, readOnly: true } # reserved: T-K8S-6a
           readinessProbe:
             httpGet: { path: /actuator/health/readiness, port: 8091 }
@@ -101,6 +112,8 @@ spec:
       volumes:
         - name: config
           configMap: { name: gpu-gateway-config }
+        - name: tls
+          secret: { secretName: {{ .Values.secrets.gatewayTls }}, defaultMode: 0400 }
         - name: jwt-keys
           secret:
             secretName: {{ .Values.secrets.gatewayJwtKeys }}

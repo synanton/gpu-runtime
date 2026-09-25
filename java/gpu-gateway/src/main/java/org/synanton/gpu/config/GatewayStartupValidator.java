@@ -22,6 +22,19 @@ public class GatewayStartupValidator {
     }
 
     static void validate(GpuGatewayProperties p) {
+        GpuGatewayProperties.Security security = p.getSecurity();
+        require(Set.of("mtls", "insecure-plaintext").contains(security.getMode()),
+                "security.mode must be mtls|insecure-plaintext, was '" + security.getMode() + "'");
+        if (security.isMtls()) {
+            GpuGatewayProperties.Security.Tls tls = security.getTls();
+            for (String[] f : new String[][]{{"cert-chain", tls.getCertChain()},
+                    {"private-key", tls.getPrivateKey()}, {"client-ca", tls.getClientCa()}}) {
+                require(f[1] != null && java.nio.file.Files.isReadable(java.nio.file.Path.of(f[1])),
+                        "security.tls." + f[0] + " is not a readable file (mTLS, Plan §13.1)");
+            }
+            require(!security.getPrincipals().isEmpty(),
+                    "security.mode=mtls requires at least one security.principals entry");
+        }
         GpuGatewayProperties.Budget budget = p.getBudget();
         require(ON_OFF.contains(budget.getEnforcement()),
                 "budget.enforcement must be enabled|disabled, was '" + budget.getEnforcement() + "'");
@@ -50,8 +63,9 @@ public class GatewayStartupValidator {
                                 + "' has no input/output-usd-per-million price");
             }
         }));
-        log.info("Startup validation passed (budget={}, cost-ledger={}, sensitivity-block-tags={})",
-                budget.getEnforcement(), p.getUsage().getCostLedger(), p.getSensitivity().getBlockExternalTags());
+        log.info("Startup validation passed (security={}, principals={}, budget={}, cost-ledger={}, "
+                        + "sensitivity-block-tags={})",
+                security.getMode(), security.getPrincipals().keySet(), budget.getEnforcement(), p.getUsage().getCostLedger(), p.getSensitivity().getBlockExternalTags());
     }
 
     private static void require(boolean condition, String message) {

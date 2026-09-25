@@ -19,6 +19,7 @@ public class GpuGatewayProperties {
     private Sensitivity sensitivity = new Sensitivity();
     private Budget budget = new Budget();
     private Usage usage = new Usage();
+    private Security security = new Security();
     private ModelCatalog modelCatalog = new ModelCatalog();
     private Map<String, ModelConfig> models = new HashMap<>();
 
@@ -112,6 +113,57 @@ public class GpuGatewayProperties {
             public void setFailureThreshold(int failureThreshold) { this.failureThreshold = failureThreshold; }
             public int getResetSeconds() { return resetSeconds; }
             public void setResetSeconds(int resetSeconds) { this.resetSeconds = resetSeconds; }
+        }
+    }
+
+    /**
+     * Caller authentication and tenant authorization (Plan §13, T-K8S-7/8).
+     * {@code mode: mtls} (default, fail closed) requires client certificates; the
+     * certificate CN is the principal, mapped to the tenants it may act for.
+     * {@code insecure-plaintext} disables transport security and tenant checks — for
+     * tests and loopback-only development, never for a shared network.
+     */
+    public static class Security {
+        private String mode = "mtls";
+        private Tls tls = new Tls();
+        private Map<String, CallerPrincipal> principals = new HashMap<>();
+
+        public String getMode() { return mode; }
+        public void setMode(String mode) { this.mode = mode; }
+        public boolean isMtls() { return "mtls".equals(mode); }
+        public Tls getTls() { return tls; }
+        public void setTls(Tls tls) { this.tls = tls; }
+        public Map<String, CallerPrincipal> getPrincipals() { return principals; }
+        public void setPrincipals(Map<String, CallerPrincipal> principals) { this.principals = principals; }
+
+        public static class Tls {
+            private String certChain;
+            private String privateKey;
+            private String clientCa;
+
+            public String getCertChain() { return certChain; }
+            public void setCertChain(String certChain) { this.certChain = certChain; }
+            public String getPrivateKey() { return privateKey; }
+            public void setPrivateKey(String privateKey) { this.privateKey = privateKey; }
+            public String getClientCa() { return clientCa; }
+            public void setClientCa(String clientCa) { this.clientCa = clientCa; }
+        }
+
+        /** A caller principal (client-certificate CN) and what it may do. */
+        public static class CallerPrincipal {
+            /** Tenants this principal may assert in tenant_id; {@code "*"} = any tenant. */
+            private java.util.List<String> tenants = new java.util.ArrayList<>();
+            /** Roles; {@code admin} is required for the routing-control RPCs. */
+            private java.util.List<String> roles = new java.util.ArrayList<>();
+
+            public java.util.List<String> getTenants() { return tenants; }
+            public void setTenants(java.util.List<String> tenants) { this.tenants = tenants; }
+            public java.util.List<String> getRoles() { return roles; }
+            public void setRoles(java.util.List<String> roles) { this.roles = roles; }
+
+            public boolean mayActFor(String tenantId) {
+                return tenants.contains("*") || tenants.contains(tenantId);
+            }
         }
     }
 
@@ -292,6 +344,8 @@ public class GpuGatewayProperties {
     public Budget getBudget() { return budget; }
     public void setBudget(Budget budget) { this.budget = budget; }
     public Usage getUsage() { return usage; }
+    public Security getSecurity() { return security; }
+    public void setSecurity(Security security) { this.security = security; }
     public void setUsage(Usage usage) { this.usage = usage; }
     public void setRouting(Routing routing) { this.routing = routing; }
     public ModelCatalog getModelCatalog() { return modelCatalog; }

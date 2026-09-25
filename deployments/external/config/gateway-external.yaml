@@ -18,6 +18,22 @@
 # logical ID restored on every downstream body, including every SSE chunk.
 
 gpu-gateway:
+  # [T-K8S-7/8] mTLS on gRPC + tenant authorization (Plan §13). Self-signed dev PKI from
+  # scripts/gen-certs.sh, mounted at /etc/gpu-gateway/tls (see gpu-7-implementation-plan.md §7).
+  # A principal is the client-certificate CN; tenant_id must be in its `tenants`.
+  security:
+    mode: mtls
+    tls:
+      cert-chain: /etc/gpu-gateway/tls/server.crt
+      private-key: /etc/gpu-gateway/tls/server.key
+      client-ca: /etc/gpu-gateway/tls/ca.crt
+    principals:
+      synanton-platform:            # the Platform (GpuExecutionClient)
+        tenants: ["*"]
+        roles: [admin]
+      gpu7-smoke:                   # scripts/smoke-test.sh, tools/gpu7-check
+        tenants: [smoke-tenant, smoke-budget-tenant]
+
   dispatch:
     strategy: external        # GPU-7 routing: provider adapters, never local vLLM.
                               # [T-K8S-44/§39] mode external-only; local-only/auto invalid.

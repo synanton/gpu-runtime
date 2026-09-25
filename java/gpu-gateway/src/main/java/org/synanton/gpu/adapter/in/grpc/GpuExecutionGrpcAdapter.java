@@ -43,12 +43,14 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
     private final GetCapacityUseCase getCapacityUseCase;
     private final GetModelsUseCase getModelsUseCase;
     private final ResponseMapper responseMapper;
+    private final CallerAuthorization callerAuthorization;
 
     @Override
     public void execute(ExecutionRequest request, StreamObserver<ExecutionResponse> observer) {
         log.info("Execute: request_id={} model={} tenant={}",
                 request.getRequestId(), request.getModel(), request.getTenantId());
         try {
+            callerAuthorization.authorizeTenant(request.getTenantId()); // §13.2
             Execution execution = executeUseCase.execute(request);
             observer.onNext(responseMapper.toExecutionResponse(execution));
             observer.onCompleted();
@@ -94,6 +96,7 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
             }
         };
         try {
+            callerAuthorization.authorizeTenant(request.getTenantId()); // §13.2
             Execution execution = executeUseCase.executeStream(request, listener);
             if (serverObserver != null && serverObserver.isCancelled()) {
                 return;
@@ -125,6 +128,9 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
      * identical status/code pairs.
      */
     static io.grpc.StatusRuntimeException toDenial(Exception e, String requestId) {
+        if (e instanceof io.grpc.StatusRuntimeException sre) {
+            return sre; // already a canonical denial (e.g. CallerAuthorization)
+        }
         Status status;
         String code;
         String message;
@@ -182,6 +188,14 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
         }
         log.info("Cancel: execution_id={}", request.getExecutionId());
         try {
+            // another tenant's execution is indistinguishable from a missing one (no leak)
+            Optional<String> owner = getStatusUseCase.tenantOf(request.getExecutionId());
+            if (owner.isPresent() && !callerAuthorization.maySee(owner.get())) {
+                observer.onNext(CancelResponse.newBuilder().setExecutionId(request.getExecutionId())
+                        .setOutcome(CancellationOutcome.NOT_APPLICABLE).build());
+                observer.onCompleted();
+                return;
+            }
             Optional<Execution> result = cancelUseCase.cancel(request.getExecutionId());
             CancellationOutcome outcome = result
                     .map(exec -> exec.state().isTerminal()
@@ -194,6 +208,8 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
                     .setOutcome(outcome)
                     .build());
             observer.onCompleted();
+        } catch (io.grpc.StatusRuntimeException e) {
+            observer.onError(e);
         } catch (Exception e) {
             log.error("Unexpected error in Cancel: execution_id={}", request.getExecutionId(), e);
             observer.onError(Status.INTERNAL.withDescription("Internal error").asRuntimeException());
@@ -209,7 +225,10 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
         }
         log.debug("GetStatus: execution_id={}", request.getExecutionId());
         try {
-            Optional<Execution> result = getStatusUseCase.getStatus(request.getExecutionId());
+            Optional<String> owner = getStatusUseCase.tenantOf(request.getExecutionId());
+            Optional<Execution> result = owner.isPresent() && !callerAuthorization.maySee(owner.get())
+                    ? Optional.empty() // another tenant's execution: indistinguishable from missing
+                    : getStatusUseCase.getStatus(request.getExecutionId());
             if (result.isEmpty()) {
                 observer.onError(Status.NOT_FOUND
                         .withDescription("execution_id not found: " + request.getExecutionId())
@@ -218,6 +237,8 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
             }
             observer.onNext(responseMapper.toStatusResponse(result.get()));
             observer.onCompleted();
+        } catch (io.grpc.StatusRuntimeException e) {
+            observer.onError(e);
         } catch (Exception e) {
             log.error("Unexpected error in GetStatus: execution_id={}", request.getExecutionId(), e);
             observer.onError(Status.INTERNAL.withDescription("Internal error").asRuntimeException());
@@ -228,6 +249,7 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
     public void getCapacity(GetCapacityRequest request, StreamObserver<CapacityResponse> observer) {
         log.debug("GetCapacity: model={}", request.getModel());
         try {
+            callerAuthorization.requireAuthenticated();
             getCapacityUseCase.getCapacity(request.getModel())
                     .ifPresentOrElse(
                             info -> {
@@ -249,6 +271,8 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
                                     .withDescription("Model not found: " + request.getModel())
                                     .asRuntimeException())
                     );
+        } catch (io.grpc.StatusRuntimeException e) {
+            observer.onError(e);
         } catch (Exception e) {
             log.error("Unexpected error in GetCapacity: model={}", request.getModel(), e);
             observer.onError(Status.INTERNAL.withDescription("Internal error").asRuntimeException());
@@ -260,9 +284,16 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
         log.debug("GetModels: operation={} provider={} tenant={}",
                 request.getOperation(), request.getProvider(), request.getTenantId());
         try {
+            if (request.getTenantId().isBlank()) {
+                callerAuthorization.requireAuthenticated();
+            } else {
+                callerAuthorization.authorizeTenant(request.getTenantId());
+            }
             GetModelsResponse response = getModelsUseCase.getModels(request);
             observer.onNext(response);
             observer.onCompleted();
+        } catch (io.grpc.StatusRuntimeException e) {
+            observer.onError(e);
         } catch (Exception e) {
             log.error("Unexpected error in GetModels: operation={}", request.getOperation(), e);
             observer.onError(Status.INTERNAL.withDescription("Internal error").asRuntimeException());

@@ -139,9 +139,17 @@ Smoke test at any point after phase 2 (requires `grpcurl`):
 
 Executable forms: unit/component tests in `java/gpu-gateway` and `scripts/smoke-test.sh` against the packaged compose stack (both over the gRPC contract).
 
-## 6. Secrets
+## 6. Secrets and mTLS
 
-`.env` (git-ignored) holds: `POSTGRES_PASSWORD`, `GPU_API_KEY_PEPPER`, `MOCK_PROVIDER_API_KEY`, and any real provider key (`OPENAI_API_KEY`, …). Provider credentials flow into config only as `${ENV_VAR}` references (§29), never as inline values, never logged. Real-provider traffic is HTTPS-only; the mock is plain HTTP inside the compose network (no external surface).
+`.env` (git-ignored) holds `POSTGRES_PASSWORD`, `MOCK_PROVIDER_API_KEY` and any real provider key (`OPENAI_API_KEY` + `OPENAI_PROVIDER_ENABLED=true`). Provider credentials flow into config only as `${ENV_VAR}` references (§29), never inline, never logged. Real-provider traffic is HTTPS-only; the mock is plain HTTP inside the compose network.
+
+The Gateway's gRPC port is **mTLS-only**. Generate the self-signed dev PKI before `docker compose up`:
+
+```bash
+./scripts/gen-certs.sh        # → ./certs (git-ignored): CA, server, clients synanton-platform + gpu7-smoke
+```
+
+Principals (client-certificate CN → allowed tenants) are in `config/gateway-external.yaml` under `gpu-gateway.security`. Full instructions — verification, adding principals, rotation, revocation, Platform client settings, troubleshooting — are in `doc/GPU Plane mTLS Setup.md`.
 
 ## 7. Relationship to GPU-5
 
