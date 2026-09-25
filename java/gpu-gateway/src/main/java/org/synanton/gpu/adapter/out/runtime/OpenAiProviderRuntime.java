@@ -156,7 +156,12 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             }
 
             SseRelay.Outcome outcome;
-            try (var lines = response.body()) {
+            if (request.getOperation() == Operation.RESPOND) {
+                try (var lines = response.body()) {
+                    outcome = SseRelay.relayResponses(lines, request.getModel(), objectMapper, sink,
+                            providerId, startMs, requestTimeout);
+                }
+            } else try (var lines = response.body()) {
                 outcome = SseRelay.relay(lines, request.getModel(), clientWantsUsage,
                         objectMapper, sink, providerId, startMs, requestTimeout);
             }
@@ -175,7 +180,9 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             }
             circuitBreaker.onSuccess();
             // usage == null → authoritative usage unavailable: leave it unset (§10.2), never zero
-            return new RuntimeResult.Success(outcome.usage(), new byte[0],
+            // RESPOND: the completed response object is the stored result (GetResponse)
+            return new RuntimeResult.Success(outcome.usage(),
+                    outcome.finalResult() != null ? outcome.finalResult() : new byte[0],
                     upstreamRequestId(response.headers(), null));
 
         } catch (CircuitBreaker.CircuitOpenException e) {
@@ -255,6 +262,7 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             case SYNTHESIZE -> base + "/chat/completions";
             case EMBED      -> base + "/embeddings";
             case RERANK     -> base + "/rerank";
+            case RESPOND    -> base + "/responses";
             default         -> throw new IllegalArgumentException("Unknown operation: " + operation);
         };
     }
@@ -271,7 +279,9 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
             // P1.1: the provider always sees the provider model ID from the routing
             // decision (RuntimeTarget.providerModelId), never the logical ID.
             object.put("model", providerModelIdOf(request, target));
-            if (streaming) {
+            if (streaming && request.getOperation() == Operation.RESPOND) {
+                object.put("stream", true); // Responses streams carry usage in the terminal event
+            } else if (streaming) {
                 // §10.3: always request authoritative usage upstream; SseRelay forwards the
                 // usage chunk downstream only if the client asked for it
                 SseRelay.requestStreamingWithUsage(object);
@@ -334,7 +344,7 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
 
         try {
             JsonNode body = objectMapper.readTree(response.body());
-            if (body.has("error")) {
+            if (body.hasNonNull("error")) { // Responses objects always carry "error": null
                 circuitBreaker.onSuccess(); // a well-formed provider-level error is not a health signal
                 return failure("upstream_provider_error",
                         "provider returned an error object", false, RetryDisposition.DEFINITELY_FAILED);
@@ -362,8 +372,9 @@ public class OpenAiProviderRuntime implements StreamingExecutionRuntime {
 
     private ExecutionUsage extractUsage(JsonNode body, long durationMs) {
         JsonNode usage = body.path("usage");
-        long inputTokens = usage.path("prompt_tokens").asLong(0);
-        long outputTokens = usage.path("completion_tokens").asLong(0);
+        // chat: prompt/completion_tokens; Responses API: input/output_tokens
+        long inputTokens = usage.path("prompt_tokens").asLong(usage.path("input_tokens").asLong(0));
+        long outputTokens = usage.path("completion_tokens").asLong(usage.path("output_tokens").asLong(0));
         return new ExecutionUsage(inputTokens, outputTokens, durationMs / 1000.0, providerId);
     }
 

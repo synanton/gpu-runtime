@@ -44,7 +44,8 @@ class ExecuteStreamGrpcTest {
                 .addService(new GpuExecutionGrpcAdapter(execute, mock(CancelUseCase.class),
                         mock(GetStatusUseCase.class), mock(GetCapacityUseCase.class),
                         mock(GetModelsUseCase.class), new ResponseMapper(),
-                        new CallerAuthorization(plaintextProperties())))
+                        new CallerAuthorization(plaintextProperties()),
+                        mock(org.synanton.gpu.domain.service.ResponsesService.class)))
                 .build().start();
         channel = InProcessChannelBuilder.forName(name).directExecutor().build();
     }

@@ -53,6 +53,7 @@ public class ExecuteService implements ExecuteUseCase {
     private final ProviderRouter providerRouter;
     private final ProviderRuntimeRegistry providerRuntimeRegistry;
     private final ExternalRoutingPolicy externalRoutingPolicy;
+    private final ResponsesService responsesService;
 
     /** The one step unary and streaming execution differ in. */
     @FunctionalInterface
@@ -89,10 +90,16 @@ public class ExecuteService implements ExecuteUseCase {
         List<RoutingDecision> candidates = providerRouter.routeWithFallbacks(request);
         RoutingDecision decision = candidates.get(0);
         log.info("Routing decision: {} (+{} fallback(s))", decision, candidates.size() - 1);
-        if (streaming && request.getOperation() != org.synanton.gpu.v1.Operation.SYNTHESIZE) {
+        boolean responses = request.getOperation() == org.synanton.gpu.v1.Operation.RESPOND;
+        if (streaming && request.getOperation() != org.synanton.gpu.v1.Operation.SYNTHESIZE && !responses) {
             // §10.1: never silently fall back to unary
             throw new RoutingDeniedException("capability_not_supported",
-                    "streaming is supported for SYNTHESIZE only");
+                    "streaming is supported for SYNTHESIZE and RESPOND only");
+        }
+        if (responses && decision.isLocal()) {
+            // §4.6: the Responses API is a GPU-7 (external provider) capability
+            throw new RoutingDeniedException("capability_not_supported",
+                    "the Responses API is not available on the local (GPU-5) path");
         }
         // GPU-7 controls (sensitivity, provider health, budget, runtime control) per candidate —
         // fail closed, before admission. Only provider_unavailable is skippable (T-K8S-52);
@@ -126,10 +133,6 @@ public class ExecuteService implements ExecuteUseCase {
             throw skipped;
         }
         ExecutionRuntime runtime = usable.get(0).runtime();
-        Dispatch dispatch = streaming
-                ? (rt, target) -> rt.executeStreaming(request, target, listener)
-                : (rt, target) -> rt.execute(request, target);
-
         // Admission path: serialized per-model inside a PostgreSQL transaction
         Execution admitted = executionAdmissionService.admitAndPersist(request, requestHash);
         if (admitted.state().isTerminal()) {
@@ -138,11 +141,30 @@ public class ExecuteService implements ExecuteUseCase {
         if (streaming) {
             listener.onAdmitted(admitted.executionId());
         }
+        // RESPOND: the Gateway owns the response ID; stamp it into every event and the result
+        String responseId = responses ? ResponsesService.responseIdFor(admitted.executionId()) : null;
+        ExecutionRuntime.StreamChunkSink sink = !streaming ? null : responses
+                ? frame -> listener.onChunk(responsesService.stampFrame(frame, responseId))
+                : listener;
+        Dispatch base = streaming
+                ? (rt, target) -> rt.executeStreaming(request, target, sink)
+                : (rt, target) -> rt.execute(request, target);
+        Dispatch dispatch = !responses ? base : (rt, target) -> {
+            ExecutionRuntime.RuntimeResult r = base.run(rt, target);
+            return r instanceof ExecutionRuntime.RuntimeResult.Success ok && ok.result() != null && ok.result().length > 0
+                    ? new ExecutionRuntime.RuntimeResult.Success(ok.usage(),
+                            responsesService.stamp(ok.result(), responseId), ok.upstreamRequestId())
+                    : r;
+        };
 
         if (decision.isLocal()) {
             return loadAndDispatchLocal(request, admitted, dispatch);
         }
-        return dispatchExternal(request, admitted, usable, dispatch);
+        Execution done = dispatchExternal(request, admitted, usable, dispatch);
+        if (responses && done.state() == ExecutionState.SUCCEEDED) {
+            responsesService.record(responseId, done); // GetResponse / DeleteResponse
+        }
+        return done;
     }
 
     /** A routing candidate with its resolved runtime. */

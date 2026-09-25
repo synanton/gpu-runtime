@@ -212,6 +212,27 @@ def run_live(pb, rpc, stub, models, c: Checks, tenant: str):
             c.check("asserting another tenant → tenant_not_allowed", trailer_code(e) == "tenant_not_allowed",
                     str(e.code()))
 
+    respond = next((m for m in models if m[0] == "RESPOND"), None)
+    if respond:
+        r = stub.Execute(req(respond[1], "RESPOND", {"model": respond[1], "input": "Reply with: OK",
+                                                     "max_output_tokens": 16}), timeout=120)
+        body = r.result.decode() if r.result else ""
+        obj = json.loads(body) if body else {}
+        c.check(f"Responses API create {respond[1]} → SUCCESS, Gateway response ID, logical model",
+                r.state == pb.SUCCESS and str(obj.get("id", "")).startswith("resp_")
+                and obj.get("model") == respond[1] and respond[2] not in body,
+                pb.ExecutionState.Name(r.state) + (f" code={r.error.code}" if r.error.code else ""))
+        if obj.get("id"):
+            got = stub.GetResponse(pb.GetResponseRequest(response_id=obj["id"]), timeout=30)
+            c.check("GetResponse returns the stored response", got.response_id == obj["id"])
+            c.check("DeleteResponse", stub.DeleteResponse(pb.DeleteResponseRequest(response_id=obj["id"]), timeout=30).deleted)
+        chunks = list(stub.ExecuteStream(req(respond[1], "RESPOND", {"model": respond[1], "input": "Count 1 to 3",
+                                                                     "max_output_tokens": 24}), timeout=120))
+        types = [json.loads(ch.data).get("type") for ch in chunks if ch.WhichOneof("event") == "data"]
+        c.check("Responses stream: typed events, one terminal, no [DONE]",
+                len(types) >= 1 and chunks[-1].WhichOneof("event") == "terminal"
+                and not any(b"[DONE]" in ch.data for ch in chunks))
+
     if embed:
         r = stub.Execute(req(embed[1], "EMBED", {"model": embed[1], "input": "hello"}), timeout=120)
         body = r.result.decode() if r.result else ""

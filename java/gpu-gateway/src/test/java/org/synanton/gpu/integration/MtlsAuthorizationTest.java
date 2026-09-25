@@ -217,4 +217,11 @@ class MtlsAuthorizationTest {
         assertThat(control.apply("carol").getRoutingControl(GetRoutingControlRequest.getDefaultInstance())
                 .getExternalRoutingConfigEnabled()).isTrue();
     }
+
+    @Test
+    void responsesApiIsNotAvailableOnTheLocalPath() throws Exception {
+        var alice = client(PKI, "alice");
+        assertThatThrownBy(() -> alice.execute(request("tenant-a").toBuilder().setOperation(Operation.RESPOND).build()))
+                .isInstanceOfSatisfying(StatusRuntimeException.class, e -> assertThat(code(e)).isEqualTo("capability_not_supported"));
+    }
 }

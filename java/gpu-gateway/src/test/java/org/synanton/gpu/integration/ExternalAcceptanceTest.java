@@ -88,6 +88,28 @@ class ExternalAcceptanceTest {
                 }
                 respond(ex, 200, "{}");
             });
+            FAKE.createContext("/good/v1/responses", ex -> {
+                JsonNode body = read(ex, "good-responses");
+                String pm = body.path("model").asText();
+                // real Responses objects always carry "error": null (regression: it was read as a failure)
+                String done = "{\"id\":\"gen-fake\",\"object\":\"response\",\"model\":\"" + pm
+                        + "\",\"status\":\"completed\",\"error\":null,\"output\":[],\"usage\":{\"input_tokens\":5,\"output_tokens\":2}}";
+                if (body.path("stream").asBoolean()) {
+                    ex.getResponseHeaders().set("Content-Type", "text/event-stream");
+                    ex.sendResponseHeaders(200, 0);
+                    try (OutputStream os = ex.getResponseBody()) {
+                        for (String ev : List.of(
+                                "{\"type\":\"response.created\",\"response\":{\"id\":\"gen-fake\",\"object\":\"response\",\"model\":\"" + pm + "\",\"status\":\"in_progress\"}}",
+                                "{\"type\":\"response.output_text.delta\",\"delta\":\"hi\"}",
+                                "{\"type\":\"response.completed\",\"response\":" + done + "}")) {
+                            os.write(("data: " + ev + "\n\n").getBytes(StandardCharsets.UTF_8));
+                        }
+                        os.write("data: [DONE]\n\n".getBytes(StandardCharsets.UTF_8)); // as OpenRouter sends
+                    }
+                    return;
+                }
+                respond(ex, 200, done);
+            });
             FAKE.createContext("/busy/v1/chat/completions", ex -> {
                 read(ex, "busy");
                 respond(ex, 503, "{\"error\":{\"message\":\"overloaded\"}}");
@@ -385,11 +407,12 @@ class ExternalAcceptanceTest {
     }
 
     @Test
-    void responsesApiIsNotPartOfTheContract() {
-        // Plan v3.0.0 §4.6: deferred — the service exposes no Responses RPC
+    void serviceDescriptorListsTheContractRpcs() {
+        // Plan §4.2/§4.6: Responses API retrieve/delete are part of the contract (revision 3.1.0)
         assertThat(GPUExecutionServiceGrpc.getServiceDescriptor().getMethods())
                 .extracting(m -> m.getBareMethodName())
-                .containsExactlyInAnyOrder("Execute", "ExecuteStream", "Cancel", "GetStatus", "GetCapacity", "GetModels");
+                .containsExactlyInAnyOrder("Execute", "ExecuteStream", "Cancel", "GetStatus", "GetCapacity", "GetModels",
+                        "GetResponse", "DeleteResponse");
     }
 
     // ─── T-K8S-38: persisted runtime routing control via GPUControlService ───
@@ -507,5 +530,73 @@ class ExternalAcceptanceTest {
         assertThat(chunks).hasSize(4);
         assertThat(JSON.readTree(chunks.get(0).getData().toStringUtf8()).path("model").asText()).isEqualTo("failover-chat");
         assertThat(chunks.get(3).getTerminal().getState()).isEqualTo(ExecutionState.SUCCESS);
+    }
+
+    // ─── Responses API (Plan §4.6): create (RESPOND), stream, retrieve, delete ───
+
+    private static ExecutionRequest respond(boolean stream) {
+        return request("shared-responses", Operation.RESPOND, "{\"model\":\"shared-responses\",\"input\":\"hi\""
+                + (stream ? ",\"stream\":true" : "") + "}").build();
+    }
+
+    @Test
+    void respondCreatesAResponseWithAGatewayIdAndTheLogicalModel() throws Exception {
+        ExecutionResponse r = stub.execute(respond(false));
+
+        assertThat(r.getState()).isEqualTo(ExecutionState.SUCCESS);
+        JsonNode obj = JSON.readTree(r.getResult().toStringUtf8());
+        assertThat(obj.path("id").asText()).startsWith("resp_").isNotEqualTo("gen-fake");
+        assertThat(obj.path("model").asText()).isEqualTo("shared-responses");
+        assertThat(r.getResult().toStringUtf8()).doesNotContain("openai/gpt-4o").doesNotContain("gen-fake");
+        assertThat(LAST_UPSTREAM_MODEL.get("good-responses")).isEqualTo("openai/gpt-4o");
+        assertThat(r.getUsage().getInputTokens()).as("Responses usage (input_tokens)").isEqualTo(5);
+    }
+
+    @Test
+    void getAndDeleteResponseLifecycle() throws Exception {
+        String id = JSON.readTree(stub.execute(respond(false)).getResult().toStringUtf8()).path("id").asText();
+
+        StoredResponse stored = stub.getResponse(GetResponseRequest.newBuilder().setResponseId(id).build());
+        assertThat(stored.getState()).isEqualTo(ExecutionState.SUCCESS);
+        assertThat(JSON.readTree(stored.getResponse().toStringUtf8()).path("id").asText()).isEqualTo(id);
+
+        assertThat(stub.deleteResponse(DeleteResponseRequest.newBuilder().setResponseId(id).build()).getDeleted()).isTrue();
+        assertDenied(() -> stub.getResponse(GetResponseRequest.newBuilder().setResponseId(id).build()),
+                Status.Code.NOT_FOUND, "response_not_found");
+        assertDenied(() -> stub.deleteResponse(DeleteResponseRequest.newBuilder().setResponseId(id).build()),
+                Status.Code.NOT_FOUND, "response_not_found");
+        assertThat(jdbc.queryForObject("SELECT result IS NULL FROM executions WHERE execution_id = "
+                + "(SELECT execution_id FROM responses WHERE response_id = ?)", Boolean.class, id))
+                .as("deleted response object is purged").isTrue();
+    }
+
+    @Test
+    void respondStreamsTypedEventsWithTheGatewayIdAndNoDone() throws Exception {
+        List<ExecutionChunk> chunks = stream(respond(true));
+
+        List<JsonNode> events = new ArrayList<>();
+        for (ExecutionChunk c : chunks.subList(0, chunks.size() - 1)) {
+            events.add(JSON.readTree(c.getData().toStringUtf8()));
+        }
+        assertThat(events).extracting(e -> e.path("type").asText())
+                .containsExactly("response.created", "response.output_text.delta", "response.completed");
+        ExecutionResponse terminal = chunks.get(chunks.size() - 1).getTerminal();
+        String id = JSON.readTree(terminal.getResult().toStringUtf8()).path("id").asText();
+        assertThat(id).startsWith("resp_");
+        assertThat(events).filteredOn(e -> e.has("response"))
+                .allSatisfy(e -> {
+                    assertThat(e.path("response").path("id").asText()).isEqualTo(id);
+                    assertThat(e.path("response").path("model").asText()).isEqualTo("shared-responses");
+                });
+        assertThat(chunks.toString()).doesNotContain("[DONE]").doesNotContain("gen-fake").doesNotContain("openai/gpt-4o");
+        assertThat(terminal.getUsage().getOutputTokens()).isEqualTo(2);
+        // a streamed response is retrievable too
+        assertThat(stub.getResponse(GetResponseRequest.newBuilder().setResponseId(id).build()).getResponseId()).isEqualTo(id);
+    }
+
+    @Test
+    void unknownResponseIsNotFound() {
+        assertDenied(() -> stub.getResponse(GetResponseRequest.newBuilder().setResponseId("resp_nope").build()),
+                Status.Code.NOT_FOUND, "response_not_found");
     }
 }

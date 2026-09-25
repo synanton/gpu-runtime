@@ -47,6 +47,10 @@ gpu-gateway:
         default-model: shared-rerank
         models:
           shared-rerank:  { provider: MOCK, provider-model-id: prov-rerank, input-usd-per-million: 1, output-usd-per-million: 0 }
+      RESPOND:
+        default-model: shared-responses
+        models:
+          shared-responses: { provider: MOCK, provider-model-id: openai/gpt-4o, input-usd-per-million: 1, output-usd-per-million: 2 }
   sensitivity:
     block-external-tags: [sensitive, pii]
   budget:

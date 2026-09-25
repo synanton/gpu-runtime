@@ -1,9 +1,9 @@
 # Synanton GPU Plane — Deployment Specification
 
-**Version:** 3.0.0
+**Version:** 3.1.0
 **Status:** Implementation baseline — platform transport is gRPC `synanton.gpu.v1` (§4)
 **Revision date:** 2026-09-25
-**Supersedes:** 2.1.9 (OpenAI-compatible REST revision; see §47)
+**Supersedes:** 3.0.0 (Responses API added, §4.6; see §47)
 **Superseded by:** None
 
 ---
@@ -195,8 +195,11 @@ It is **byte-identical** in `gpu-runtime` and `platform` and CI-enforced by `scr
 | `GetStatus(GetStatusRequest) → ExecutionStatus` | Authoritative status; lazy lease reconciliation | Yes | Yes |
 | `GetCapacity(GetCapacityRequest) → CapacityResponse` | Advisory capacity | Yes | Yes |
 | `GetModels(GetModelsRequest) → GetModelsResponse` | Model discovery (§4.4) | Yes | Yes |
+| `GetResponse(GetResponseRequest) → StoredResponse` | Responses API retrieve (§4.6) | No | Yes |
+| `DeleteResponse(DeleteResponseRequest) → DeleteResponseResponse` | Responses API delete (§4.6) | No | Yes |
+| `GPUControlService.*` | Routing control, admin role (§32/§33) | — | Yes |
 
-The operation is selected by `ExecutionRequest.operation` (`SYNTHESIZE`, `EMBED`, `RERANK`), not by path. RERANK is available only where the model/provider mapping supports it (§40).
+The operation is selected by `ExecutionRequest.operation` (`SYNTHESIZE`, `EMBED`, `RERANK`, `RESPOND`), not by path. RERANK is available only where the model/provider mapping supports it (§40).
 
 Ports: gRPC `9090`; actuator health/metrics `8091` (HTTP, not an API surface).
 
@@ -205,8 +208,8 @@ Ports: gRPC `9090`; actuator health/metrics `8091` (HTTP, not an API surface).
 The following are outside the contract and are not served:
 
 ```text
-OpenAI REST API (any /v1/* path)            OpenAI Responses API
-moderations, audio, images, files           fine-tuning, batches
+OpenAI REST API (any /v1/* path)            moderations, audio, images, files
+fine-tuning, batches
 assistants, vector stores, threads          API-key (sk-syn-/syn_live_) auth
 ```
 
@@ -224,9 +227,23 @@ An `ExecutionRequest` whose operation or model mapping is unsupported is denied 
 
 `synanton.gpu.v1.ModelInfo` is the canonical model object: `model_id` (logical), `display_name`, `provider` (provider name), `operation`, `is_default`, `max_input_tokens`, `max_output_tokens`, `embedding_dim`.
 
-## 4.6 Responses API — Deferred
+## 4.6 Responses API (GPU-7)
 
-The OpenAI Responses API is **not part of this contract** in revision 3.0.0 (GPU-5 or GPU-7). It is deferred to a future contract revision, which must add it to the protobuf contract before any implementation. No RPC, provider route, or configuration key for it exists, and none may be enabled.
+The OpenAI Responses API is part of the contract **for GPU-7** (revision 3.1.0). GPU-5 does not offer it: a `RESPOND` request on the local path is denied with `capability_not_supported`.
+
+| Responses API operation | Contract |
+| --- | --- |
+| create | `Execute` / `ExecuteStream` with `operation = RESPOND`; `payload` = Responses request body |
+| retrieve | `GetResponse(response_id)` |
+| delete | `DeleteResponse(response_id)` |
+
+Rules:
+
+* **The Gateway owns response IDs.** The result is the response object with `id = resp_<execution-id>`. The provider's own ID is replaced in the object and in every stream event. Retrieve and delete are served from Gateway storage (PostgreSQL `responses`, V5), so they work with providers that do not store responses.
+* The model ID is restored to the logical ID at the top level and in nested `response.model`. Provider model IDs never appear downstream.
+* Usage comes from the response's `usage` (`input_tokens` / `output_tokens`) and feeds the cost ledger and budget like any other operation.
+* `GetResponse` / `DeleteResponse` of an unknown, deleted, or other-tenant response → `NOT_FOUND` / `response_not_found`. Delete purges the stored object.
+* A provider without Responses support fails the execution. The request is never converted to Chat Completions.
 
 ## 4.7 Contract Versioning
 
@@ -487,7 +504,7 @@ The GPU-7 adapter always requests `stream_options.include_usage = true` upstream
 
 ## 10.4 Responses API Streaming
 
-Deferred with the Responses API (§4.6).
+`ExecuteStream` with `RESPOND` yields one `data` message per typed Responses event (the event JSON carries its `type`: `response.created`, `response.output_text.delta`, …), followed by exactly one `terminal` message. The stream ends at the first terminal event type — `response.completed`, `response.incomplete` or `response.failed`. `[DONE]` is never part of the Responses protocol and is never forwarded, even if a provider sends it. The terminal message's `result` is the final response object, retrievable later with `GetResponse`. `stream_options.include_usage` does not apply: usage is inside the terminal event.
 
 ---
 
@@ -1257,6 +1274,7 @@ The suite MUST verify:
 * provider 5xx → `upstream_provider_error`; provider timeout → `upstream_provider_timeout`;
 * provider lacking rerank → `capability_not_supported`;
 * LOCAL request, unavailable provider, or unknown provider → denied — **no local fallback**;
+* Responses API: `RESPOND` create (unary and streaming, typed events, no `[DONE]`), Gateway response IDs, `GetResponse` / `DeleteResponse`, `response_not_found` after delete;
 * no Envoy, no vLLM, no execution JWT required.
 
 ---
@@ -1472,7 +1490,7 @@ There is no trusted internal execution JWT boundary.
 10. Multi-provider routing is implemented only after the single-provider path is validated.
 11. Provider capability gaps are surfaced explicitly.
 12. Provider errors are normalized through §16.
-13. The Responses API is deferred (§4.6).
+13. The Responses API is a GPU-7 capability with Gateway-owned response IDs (§4.6).
 14. Provider model IDs are never exposed downstream.
 
 ---
@@ -1592,6 +1610,7 @@ The resulting package MUST demonstrate:
 * SYNTHESIZE (unary and streaming) routed to provider;
 * EMBED routed to provider;
 * RERANK routed when configured;
+* RESPOND (Responses API) create/retrieve/delete;
 * no execution JWT;
 * kill switch fail closed;
 * budget enforcement fail closed;
@@ -1603,7 +1622,14 @@ The package MAY target Kubernetes or a single-node container deployment.
 
 ---
 
-# 47. Change Summary — v3.0.0
+# 47. Change Summary — v3.1.0
+
+1. **Responses API added (GPU-7):** `Operation.RESPOND`, `GetResponse`, `DeleteResponse`, Gateway-owned response IDs, typed-event streaming (§4.6, §10.4); PostgreSQL `responses` (V5).
+2. **GPUControlService** routing-control RPCs (§32/§33/§38); mTLS caller authentication and tenant authorization (§13); multi-provider failover (§39a).
+
+---
+
+# 47-3.0.0. Change Summary — v3.0.0
 
 1. **Transport decision (PR #15):** the GPU Plane's API is gRPC `synanton.gpu.v1` (§4). The OpenAI-compatible REST API, API-key authentication, OpenAI identity headers, HTTP error envelopes and rate-limit headers are removed; the Responses API is deferred.
 2. **Contract additions (additive, mirrored in `platform`):** `ExecuteStream` RPC and `ExecutionChunk`; `upstream_request_id` on `ExecutionResponse`/`ExecutionStatus`; `ErrorInfo.code`; `ExecutionRequest.data_tags` (sensitivity); `ModelInfo.provider_model_id` deprecated and never populated.
@@ -1670,7 +1696,7 @@ No implementation should treat an unpopulated freeze attestation as a frozen rel
 **Status:** Implementation baseline (not frozen)
 
 ```text
-Specification version: 3.0.0
+Specification version: 3.1.0
 
 Frozen by:
 <reviewer/approver>
@@ -1682,7 +1708,7 @@ Freeze date:
 <date>
 
 Supersedes:
-2.1.9
+3.0.0
 
 Superseded by:
 none
@@ -1696,7 +1722,7 @@ The v3.0.0 revision SHOULD be subjected to a section-by-section comparison again
 
 # 50. Final Scope Statement
 
-Synanton GPU Plane v3.0.0 defines:
+Synanton GPU Plane v3.1.0 defines:
 
 * a local GPU execution profile for GPU-5;
 * a pure external-provider profile for GPU-7;
@@ -1714,4 +1740,4 @@ Synanton GPU Plane v3.0.0 defines:
 
 The specification is intended to serve as the implementation baseline without silently dropping normative content from prior revisions.
 
-**v3.0.0 is the implementation baseline pending the v2.1.9 → v3.0.0 fidelity diff and freeze attestation.**
+**v3.1.0 is the implementation baseline pending the fidelity diff and freeze attestation.**

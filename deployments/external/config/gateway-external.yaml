@@ -138,6 +138,22 @@ gpu-gateway:
             is-default: true
             max-input-tokens: 4096
 
+      RESPOND:                # OpenAI Responses API (Plan §4.6; GPU-7 only)
+        default-model: synanton-mock-responses
+        models:
+          synanton-mock-responses:
+            provider: MOCK
+            provider-model-id: mock-chat-1
+            input-usd-per-million: 1.00
+            output-usd-per-million: 2.00
+            display-name: "Mock Responses (acceptance)"
+            is-default: true
+          synanton-free-responses:    # real arm: OpenRouter Responses API, free model (cost 0)
+            provider: OPENAI
+            provider-model-id: liquid/lfm-2.5-2.6b:free
+            input-usd-per-million: 0
+            output-usd-per-million: 0
+
   # [T-K8S-49] sensitivity policy — ENFORCED, fail closed
   sensitivity:
     block-external-tags: [sensitive, pii]

@@ -249,7 +249,7 @@ public class VllmRuntime implements StreamingExecutionRuntime {
             JsonNode body = objectMapper.readTree(response.body());
 
             // vLLM error field present in 200 response (rare)
-            if (body.has("error")) {
+            if (body.hasNonNull("error")) { // Responses objects always carry "error": null
                 String errMsg = body.path("error").path("message").asText("unknown error");
                 return new RuntimeResult.Failure(
                         ExecutionError.nonRetryable("RUNTIME_FAILED", "vLLM error: " + errMsg),

@@ -129,6 +129,20 @@ if [[ "${SMOKE_REAL_PROVIDER:-0}" == "1" ]]; then
   [[ "$out" == *capability_not_supported* ]] && ok "real arm has no rerank → capability_not_supported" || bad "real rerank gap" "$out"
 fi
 
+echo "== Responses API (Plan §4.6): create, stream, retrieve, delete"
+out="$(call Execute "$(request "$RUN-resp" synanton-mock-responses RESPOND '{"model":"synanton-mock-responses","input":"hi"}')")"
+rid="$(field 'json.loads(res).get("id","") if res else ""' <<<"$out")"
+[[ "$rid" == resp_* && "$(field 'json.loads(res).get("model") if res else ""' <<<"$out")" == "synanton-mock-responses" ]] \
+  && ok "RESPOND → Gateway response ID + logical model" || bad "RESPOND create" "$out"
+out="$(call GetResponse "{\"response_id\":\"$rid\"}")"
+[[ "$out" == *"\"responseId\": \"$rid\""* ]] && ok "GetResponse returns the stored response" || bad "GetResponse" "$out"
+out="$(call DeleteResponse "{\"response_id\":\"$rid\"}")"
+[[ "$out" == *'"deleted": true'* ]] && ok "DeleteResponse" || bad "DeleteResponse" "$out"
+out="$(GRPCURL_EXTRA="-v" call GetResponse "{\"response_id\":\"$rid\"}")"
+[[ "$out" == *response_not_found* ]] && ok "deleted response → NOT_FOUND response_not_found" || bad "get after delete" "$out"
+out="$(call ExecuteStream "$(request "$RUN-resp-stream" synanton-mock-responses RESPOND '{"model":"synanton-mock-responses","input":"hi"}')")"
+[[ "$out" == *'"terminal"'* && "$out" != *'[DONE]'* ]] && ok "RESPOND stream: typed events + terminal, no [DONE]" || bad "RESPOND stream" "$out"
+
 echo "== caller authentication and tenant authorization (mTLS, Plan §13)"
 out="$(GRPCURL_EXTRA="-v" call Execute "$(request "$RUN-tenant" synanton-mock-chat SYNTHESIZE '{"messages":[]}' someone-elses-tenant)")"
 [[ "$out" == *PermissionDenied* && "$out" == *tenant_not_allowed* ]] \

@@ -44,6 +44,7 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
     private final GetModelsUseCase getModelsUseCase;
     private final ResponseMapper responseMapper;
     private final CallerAuthorization callerAuthorization;
+    private final org.synanton.gpu.domain.service.ResponsesService responsesService;
 
     @Override
     public void execute(ExecutionRequest request, StreamObserver<ExecutionResponse> observer) {
@@ -167,6 +168,57 @@ public class GpuExecutionGrpcAdapter extends GPUExecutionServiceGrpc.GPUExecutio
             log.error("Unexpected error: request_id={}", requestId, e);
         }
         return status.withDescription(code + ": " + message).asRuntimeException(errorCodeTrailers(code));
+    }
+
+    // ─── Responses API retrieve/delete (Plan §4.6) ────────────────────────────
+
+    @Override
+    public void getResponse(org.synanton.gpu.v1.GetResponseRequest request,
+                            StreamObserver<org.synanton.gpu.v1.StoredResponse> observer) {
+        try {
+            var view = visibleResponse(request.getResponseId())
+                    .flatMap(id -> responsesService.get(id))
+                    .orElseThrow(() -> CallerAuthorization.denial(Status.NOT_FOUND, "response_not_found",
+                            "response '" + request.getResponseId() + "' not found"));
+            var e = view.execution();
+            var out = org.synanton.gpu.v1.StoredResponse.newBuilder()
+                    .setResponseId(view.responseId()).setExecutionId(e.executionId())
+                    .setRequestId(e.requestId())
+                    .setState(responseMapper.toExecutionResponse(e).getState());
+            if (e.result() != null) {
+                out.setResponse(com.google.protobuf.ByteString.copyFrom(e.result()));
+            }
+            observer.onNext(out.build());
+            observer.onCompleted();
+        } catch (Exception e) {
+            observer.onError(toDenial(e, request.getResponseId()));
+        }
+    }
+
+    @Override
+    public void deleteResponse(org.synanton.gpu.v1.DeleteResponseRequest request,
+                               StreamObserver<org.synanton.gpu.v1.DeleteResponseResponse> observer) {
+        try {
+            boolean deleted = visibleResponse(request.getResponseId())
+                    .map(responsesService::delete).orElse(false);
+            if (!deleted) {
+                throw CallerAuthorization.denial(Status.NOT_FOUND, "response_not_found",
+                        "response '" + request.getResponseId() + "' not found");
+            }
+            observer.onNext(org.synanton.gpu.v1.DeleteResponseResponse.newBuilder()
+                    .setResponseId(request.getResponseId()).setDeleted(true).build());
+            observer.onCompleted();
+        } catch (Exception e) {
+            observer.onError(toDenial(e, request.getResponseId()));
+        }
+    }
+
+    /** The response ID if it exists and the caller may see its tenant (else empty: no leak). */
+    private Optional<String> visibleResponse(String responseId) {
+        callerAuthorization.requireAuthenticated();
+        return responsesService.tenantOf(responseId)
+                .filter(callerAuthorization::maySee)
+                .map(t -> responseId);
     }
 
     /** Trailer key carrying the canonical error code (Deployment Plan §16). */
