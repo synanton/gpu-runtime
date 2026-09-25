@@ -15,12 +15,12 @@ import java.util.concurrent.ConcurrentHashMap;
 
 /**
  * Provider registry (PR #15 review §5): resolves a {@link RoutingDecision}'s
- * provider id to a runtime, replacing the hard-coded OpenRouter special case.
+ * provider id to a runtime, replacing the hard-coded OpenAi special case.
  *
  * <p>Every configured provider ({@code gpu-gateway.providers.<id>}) gets a lazily
  * built {@link OpenAiProviderRuntime} with its own credentials, base URL, and
  * circuit breaker (state persists across calls because instances are cached).
- * OpenRouter's attribution headers live here as configuration, not code.
+ * OpenAi's attribution headers live here as configuration, not code.
  */
 @Component
 @Slf4j
@@ -58,7 +58,7 @@ public class ProviderRuntimeRegistry {
         CircuitBreaker breaker = new CircuitBreaker(
                 cb.getFailureThreshold(), Duration.ofSeconds(cb.getResetSeconds()));
 
-        Map<String, String> extraHeaders = "openrouter".equals(providerId)
+        Map<String, String> extraHeaders = "openai".equals(providerId)
                 ? Map.of("HTTP-Referer", "https://synanton.ai", "X-Title", "Synanton GPU Gateway")
                 : Map.of();
 

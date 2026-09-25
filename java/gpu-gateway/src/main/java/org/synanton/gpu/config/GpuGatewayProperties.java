@@ -39,7 +39,7 @@ public class GpuGatewayProperties {
 
     /**
      * Provider registry (PR #15 review §5): keyed by provider id
-     * ({@code gpu-gateway.providers.<id>}), e.g. {@code openrouter}, {@code mock}.
+     * ({@code gpu-gateway.providers.<id>}), e.g. {@code openai}, {@code mock}.
      *
      * <p>Enforced today: {@code api-key}, {@code base-url}, {@code enabled},
      * {@code circuit-breaker}. Declarative until their tickets land (do not claim
@@ -116,7 +116,7 @@ public class GpuGatewayProperties {
             public static class ModelInfo {
                 private String providerModelId;
                 private String displayName;
-                private String provider = "OPENROUTER";
+                private String provider = "OPENAI";
                 private boolean isDefault = false;
                 private int maxInputTokens = 8192;
                 private int maxOutputTokens = 2048;

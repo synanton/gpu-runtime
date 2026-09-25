@@ -14,7 +14,7 @@ import java.util.Set;
 /**
  * Authoritative routing authority (PR #15 review P0.4/§5).
  *
- * <p>Replaces the old implicit model ({@code if provider == OPENROUTER else vLLM}),
+ * <p>Replaces the old implicit model ({@code if provider == OPENAI else vLLM}),
  * which violated GPU-7's no-local-fallback security invariant. One decision point:
  *
  * <pre>
@@ -24,7 +24,7 @@ import java.util.Set;
  * <p>Strategies ({@code gpu-gateway.dispatch.strategy}, fail closed at startup):
  * <ul>
  *   <li>{@code stub} / {@code direct} — local GPU-5 path; a request explicitly marked
- *       {@code OPENROUTER} still routes externally (mixed GPU-5+GPU-7 gateway).</li>
+ *       {@code OPENAI} still routes externally (mixed GPU-5+GPU-7 gateway).</li>
  *   <li>{@code external} — GPU-7: provider registry only. {@code LOCAL} requests are
  *       denied; unknown/disabled providers are denied; the kill switch
  *       ({@code gpu-gateway.routing.external-enabled: false}) denies everything.
@@ -80,9 +80,9 @@ public class ProviderRouter {
         Operation operation = request.getOperation();
 
         if (!isExternal()) {
-            // GPU-5 local path; explicit OPENROUTER requests still dispatch externally
+            // GPU-5 local path; explicit OPENAI requests still dispatch externally
             // (mixed-mode gateway behavior predating this router, preserved).
-            if (request.getProvider() == Provider.OPENROUTER) {
+            if (request.getProvider() == Provider.EXTERNAL_OPENAI) {
                 return externalDecision(logicalModelId, operation);
             }
             return RoutingDecision.local(logicalModelId, operation, vllmEndpoint);
@@ -100,9 +100,9 @@ public class ProviderRouter {
         return externalDecision(logicalModelId, operation);
     }
 
-    /** Catalog-driven external decision; shared by external mode and mixed-mode OPENROUTER requests. */
+    /** Catalog-driven external decision; shared by external mode and mixed-mode OPENAI requests. */
     private RoutingDecision externalDecision(String logicalModelId, Operation operation) {
-        // Catalog stores wire-style provider names ("MOCK", "OPENROUTER"); the registry
+        // Catalog stores wire-style provider names ("MOCK", "OPENAI"); the registry
         // keys are lowercase config ids. Normalize at the boundary.
         String providerId = resolveProviderIdChecked(logicalModelId, operation)
                 .toLowerCase(java.util.Locale.ROOT);

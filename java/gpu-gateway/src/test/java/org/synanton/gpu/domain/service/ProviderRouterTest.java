@@ -28,15 +28,15 @@ class ProviderRouterTest {
         properties = new GpuGatewayProperties();
         properties.getDispatch().setStrategy("external");
 
-        // catalog: mock-chat-1 (MOCK), gpt-4o-mini (OPENROUTER, mapped), mock-reranker-1 (MOCK)
+        // catalog: mock-chat-1 (MOCK), gpt-4o-mini (OPENAI, mapped), mock-reranker-1 (MOCK)
         catalog("SYNTHESIZE", "mock-chat-1", "MOCK", "mock-chat-1-upstream");
-        catalog("SYNTHESIZE", "gpt-4o-mini", "OPENROUTER", "openai/gpt-4o-mini");
+        catalog("SYNTHESIZE", "gpt-4o-mini", "OPENAI", "openai/gpt-4o-mini");
         catalog("EMBED", "mock-embedding-1", "MOCK", "mock-embedding-1");
         catalog("RERANK", "mock-reranker-1", "MOCK", "mock-reranker-1");
 
-        // registry: mock + openrouter
+        // registry: mock + openai
         provider("mock", "http://mock-provider:8080", "mock-key", true);
-        provider("openrouter", "https://openrouter.ai/api/v1", "or-key", true);
+        provider("openai", "https://openrouter.ai/api/v1", "or-key", true);
 
         router = new ProviderRouter(properties, new ModelCatalogService(properties));
     }
@@ -86,7 +86,7 @@ class ProviderRouterTest {
         // review §6: "provider model mapping → logical ID rewritten upstream"
         RoutingDecision decision = router.route(request("gpt-4o-mini", Operation.SYNTHESIZE));
 
-        assertThat(decision.providerId()).isEqualTo("openrouter");
+        assertThat(decision.providerId()).isEqualTo("openai");
         assertThat(decision.logicalModelId()).isEqualTo("gpt-4o-mini");
         assertThat(decision.providerModelId()).isEqualTo("openai/gpt-4o-mini");
     }
@@ -154,7 +154,7 @@ class ProviderRouterTest {
     @Test
     void unsupportedStrategyFailsClosedAtStartup() {
         // §5.5: boot must fail, never silently fall back
-        properties.getDispatch().setStrategy("openrouter"); // retired alias (review P0.4)
+        properties.getDispatch().setStrategy("openai"); // retired alias (review P0.4)
 
         assertThatThrownBy(() -> new ProviderRouter(properties, new ModelCatalogService(properties)))
                 .isInstanceOf(IllegalStateException.class)

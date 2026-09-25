@@ -76,7 +76,7 @@ class OpenAiProviderRuntimeTest {
     }
 
     private OpenAiProviderRuntime newRuntime(int breakerThreshold, Duration breakerReset, Duration timeout) {
-        return new OpenAiProviderRuntime("openrouter", baseUrl, "test-key", Map.of(),
+        return new OpenAiProviderRuntime("openai", baseUrl, "test-key", Map.of(),
                 timeout, new CircuitBreaker(breakerThreshold, breakerReset), objectMapper);
     }
 
@@ -94,7 +94,7 @@ class OpenAiProviderRuntimeTest {
     }
 
     private RuntimeTarget target() {
-        return new RuntimeTarget(baseUrl, "openrouter", PROVIDER_MODEL);
+        return new RuntimeTarget(baseUrl, "openai", PROVIDER_MODEL);
     }
 
     private static String unaryResponse() {

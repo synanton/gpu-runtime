@@ -11,8 +11,8 @@
 
 **Implemented and unit-tested** (`java/gpu-gateway`):
 
-- Provider registry: `gpu-gateway.providers.<id>` keyed by provider id (`openrouter`,
-  `mock`, future) — replaces the hard-coded OpenRouter special case (review §5).
+- Provider registry: `gpu-gateway.providers.<id>` keyed by provider id (`openai`,
+  `mock`, future) — replaces the hard-coded OpenAi special case (review §5).
 - `ProviderRouter` — one authoritative routing model: catalog-driven
   `RoutingDecision` (logical model → provider id, provider model ID, endpoint);
   fail-closed startup on unknown `dispatch.strategy` (§5.5); external mode denies
@@ -100,24 +100,24 @@ deployments/external/
 
 ## 3. Configuration contract
 
-`config/gateway-external.yaml` is the **deployment contract** the T-K8S-38..52 tickets implement against. It extends the existing code schema (`gpu-gateway.providers` / `gpu-gateway.model-catalog` from `OpenRouterRuntime`/`ModelCatalogService`) with the ticket-owned keys marked `[T-K8S-xx]`. Per spec it encodes:
+`config/gateway-external.yaml` is the **deployment contract** the T-K8S-38..52 tickets implement against. It extends the existing code schema (`gpu-gateway.providers` / `gpu-gateway.model-catalog` from `OpenAiRuntime`/`ModelCatalogService`) with the ticket-owned keys marked `[T-K8S-xx]`. Per spec it encodes:
 
-| Spec | Control | Config key |
-|---|---|---|
-| §5.4/§39 | mode `external-only`; reject `local-only`/`auto` at startup (fail closed, §5.5) | `gpu-gateway.dispatch.strategy: external` |
-| §26/T-K8S-40 | provider registry | `gpu-gateway.providers.<id>` (code schema exists: `providers.openrouter`) |
-| T-K8S-41 | logical model → provider/model mapping | `gpu-gateway.model-catalog` (code schema exists) |
+| Spec | Control | Config key                                                                                                                                                |
+|---|---|-----------------------------------------------------------------------------------------------------------------------------------------------------------|
+| §5.4/§39 | mode `external-only`; reject `local-only`/`auto` at startup (fail closed, §5.5) | `gpu-gateway.dispatch.strategy: external`                                                                                                                 |
+| §26/T-K8S-40 | provider registry | `gpu-gateway.providers.<id>` (code schema exists: `providers.openai`)                                                                                     |
+| T-K8S-41 | logical model → provider/model mapping | `gpu-gateway.model-catalog` (code schema exists)                                                                                                          |
 | T-K8S-42/§35 | OpenAI-compatible adapter: chat, embeddings, responses (when supported), streaming, usage, error mapping §16 | `OpenAiProviderRuntime` (generic, all configured providers) — implemented at the runtime layer; Responses API + client-facing mapping await the HTTP face |
-| T-K8S-43/§29 | provider credentials from env, never logged, HTTPS only | `providers.<id>.api-key: ${ENV_VAR}` |
-| T-K8S-44/§39 | routing modes | `gpu-gateway.routing.external-enabled` |
-| T-K8S-45 | circuit breaker per provider | `gpu-gateway.providers.<id>.circuit-breaker` |
-| T-K8S-46 | provider health, independent of Gateway health | `gpu-gateway.providers.<id>.health` |
-| T-K8S-47 | provider usage capture | usage accounting (PostgreSQL) |
-| T-K8S-48/48b | cost ledger + budget enforcement, fail closed | `gpu-gateway.usage.cost-ledger`, `gpu-gateway.budget` |
-| T-K8S-49 | sensitivity policy, fail closed | `gpu-gateway.sensitivity` |
-| T-K8S-39/§32 | external routing kill switch, fail closed | `gpu-gateway.routing.external-enabled: false` |
-| T-K8S-38/§33 | persistent routing control state (survives restart) | PostgreSQL |
-| T-K8S-50/§16 | provider errors → canonical envelope | adapter (code) |
+| T-K8S-43/§29 | provider credentials from env, never logged, HTTPS only | `providers.<id>.api-key: ${ENV_VAR}`                                                                                                                      |
+| T-K8S-44/§39 | routing modes | `gpu-gateway.routing.external-enabled`                                                                                                                    |
+| T-K8S-45 | circuit breaker per provider | `gpu-gateway.providers.<id>.circuit-breaker`                                                                                                              |
+| T-K8S-46 | provider health, independent of Gateway health | `gpu-gateway.providers.<id>.health`                                                                                                                       |
+| T-K8S-47 | provider usage capture | usage accounting (PostgreSQL)                                                                                                                             |
+| T-K8S-48/48b | cost ledger + budget enforcement, fail closed | `gpu-gateway.usage.cost-ledger`, `gpu-gateway.budget`                                                                                                     |
+| T-K8S-49 | sensitivity policy, fail closed | `gpu-gateway.sensitivity`                                                                                                                                 |
+| T-K8S-39/§32 | external routing kill switch, fail closed | `gpu-gateway.routing.external-enabled: false`                                                                                                             |
+| T-K8S-38/§33 | persistent routing control state (survives restart) | PostgreSQL                                                                                                                                                |
+| T-K8S-50/§16 | provider errors → canonical envelope | adapter (code)                                                                                                                                            |
 
 Rerank (§40): advertised only when the provider/model mapping supports it — with the
 mock provider it is supported (`MOCK_RERANK_SUPPORTED=1`); when a provider lacks
@@ -164,7 +164,7 @@ API-key auth, §16 envelopes, §21 request IDs).
 
 ## 6. Secrets
 
-`.env` (git-ignored) holds: `POSTGRES_PASSWORD`, `GPU_API_KEY_PEPPER`, `MOCK_PROVIDER_API_KEY`, and any real provider key (`OPENROUTER_API_KEY`, …). Provider credentials flow into config only as `${ENV_VAR}` references (§29), never as inline values, never logged. Real-provider traffic is HTTPS-only; the mock is plain HTTP inside the compose network (no external surface).
+`.env` (git-ignored) holds: `POSTGRES_PASSWORD`, `GPU_API_KEY_PEPPER`, `MOCK_PROVIDER_API_KEY`, and any real provider key (`OPENAI_API_KEY`, …). Provider credentials flow into config only as `${ENV_VAR}` references (§29), never as inline values, never logged. Real-provider traffic is HTTPS-only; the mock is plain HTTP inside the compose network (no external surface).
 
 ## 7. Relationship to GPU-5
 

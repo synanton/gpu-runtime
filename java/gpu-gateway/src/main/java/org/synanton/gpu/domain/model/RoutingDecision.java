@@ -11,7 +11,7 @@ import org.synanton.gpu.v1.Operation;
  * appears here.
  *
  * @param logicalModelId  the Synanton logical model ID from the request (public contract)
- * @param providerId      the configured provider key (e.g. {@code openrouter}, {@code mock})
+ * @param providerId      the configured provider key (e.g. {@code openai}, {@code mock})
  * @param providerModelId the upstream model ID sent to the provider (never exposed downstream)
  * @param operation       SYNTHESIZE / EMBED / RERANK
  * @param endpoint        provider base URL

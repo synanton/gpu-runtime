@@ -30,8 +30,8 @@ import java.util.Map;
 /**
  * Generic OpenAI-compatible provider runtime (PR #15 review P0.3/P1.1/P1.2, §5).
  * One parameterized implementation serves every configured provider —
- * {@code openrouter}, {@code mock}, future providers — replacing the hard-coded
- * OpenRouter special case. OpenRouter's extra attribution headers are supplied
+ * {@code openai}, {@code mock}, future providers — replacing the hard-coded
+ * openai special case. OpenAi's extra attribution headers are supplied
  * via {@code extraHeaders} by {@link ProviderRuntimeRegistry}.
  *
  * <p>Contract guarantees:

@@ -60,13 +60,13 @@ public class ModelCatalogService {
     }
 
     /**
-     * Resolves the configured provider id (e.g. {@code openrouter}, {@code mock}) for a
+     * Resolves the configured provider id (e.g. {@code openai}, {@code mock}) for a
      * logical model under an operation. Returns {@code null} when the model is not
      * registered for that operation — callers must fail closed, never default.
      *
      * <p>Replaces the old proto-enum-based {@code resolveProvider}, which crashed with
      * {@code IllegalArgumentException} on any provider not in the wire enum (e.g. MOCK)
-     * and silently defaulted to OPENROUTER (PR #15 review P0.3).
+     * and silently defaulted to OPENAI (PR #15 review P0.3).
      */
     public String resolveProviderId(String modelId, Operation operation) {
         String operationKey = operation.name();

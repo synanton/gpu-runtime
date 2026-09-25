@@ -63,7 +63,7 @@ services:
       GPU_API_KEY_PEPPER: ${GPU_API_KEY_PEPPER:?set in .env}
       # provider credentials arrive as env vars referenced from config (§29)
       MOCK_PROVIDER_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
-      OPENROUTER_API_KEY: ${OPENROUTER_API_KEY:-} # optional real provider arm
+      OPENAI_API_KEY: ${OPENAI_API_KEY:-} # optional real provider arm
     volumes:
       - ./config/gateway-external.yaml:/etc/gpu-gateway/gateway-external.yaml:ro
     ports:

@@ -19,8 +19,8 @@ public class RuntimeFactory {
     private final ProviderRuntimeRegistry providerRuntimeRegistry;
 
     public ExecutionRuntime getRuntime(Provider provider) {
-        if (provider == Provider.OPENROUTER) {
-            return providerRuntimeRegistry.get("openrouter").orElse(vllmRuntime);
+        if (provider == Provider.EXTERNAL_OPENAI) {
+            return providerRuntimeRegistry.get("openai").orElse(vllmRuntime);
         }
         return vllmRuntime;
     }
