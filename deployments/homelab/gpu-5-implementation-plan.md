@@ -1,7 +1,7 @@
 # GPU-5 Homelab Implementation Plan
 
-**Status:** Contract defined; implementation done except execution-JWT signing/JWKS (T-K8S-6a); acceptance blocked on T-K8S-6a and the PoC run (§11, §12.2). One inference workload per physical GPU.
-**Revision date:** 2026-09-24
+**Status:** Contract defined; implementation done except execution-JWT signing/JWKS (T-K8S-6a); acceptance blocked on T-K8S-6a and the PoC run (§11, §12.2). T-K8S-6a plan: §13 (also fixes the model-readiness poll through Envoy). One inference workload per physical GPU.
+**Revision date:** 2026-09-25
 **Canonical spec:** `../../doc/GPU-5  GPU-6  GPU-7 Deployment Plan.md`
 **Model setup doc:** `../../doc/GPU-5 Local Models Setup.md` (placement superseded — see D2/D4 below)
 **Cluster reference:** `./claster-as-build.md`
@@ -434,8 +434,131 @@ the best-effort etcd backup on node0.
    §8.1–8.3 (direct backend smoke) are executable today; end-to-end GPU-5 execution
    through the Gateway is not. The gateway config is complete (strategy `direct`,
    `vllm-endpoint: http://envoy:8080`, 3 LOCAL catalog entries — verified to boot
-   and advertise exactly the 3 IDs).
-3. **Envoy body-hash enforcement** (spec §12): `jwt_authn` validates signature/iss/aud/exp; SHA-256 body-hash claim verification may need a Lua/ext filter — tracked under T-K8S-6b acceptance.
+   and advertise exactly the 3 IDs). **Planned in §13**, which also covers a second
+   blocker: the `/v1/models` readiness poll can't pass through Envoy (§13.2).
+3. **Envoy body-hash enforcement** (spec §12): `jwt_authn` validates signature/iss/aud/exp; SHA-256 body-hash claim verification may need a Lua/ext filter — tracked under T-K8S-6b acceptance. Decided (§13.3 J2): 6a emits the `body_sha256` claim now, and enforcement is a 6b follow-up.
 4. **TEI turing build on GTX 1650** (D4): sm_7.5 consumer card without tensor cores, TEI's turing variant is marked experimental upstream. Phase 3 validates it; fallback ladder is bge-small → TEI CPU on node1. If neither works, embedding moves to node2 (vLLM, Qwen3-Embedding-0.6B — already on disk) and the reranker returns to node1 only if a CPU reranker path is validated — i.e. reopen D2/D4 rather than silently re-colocating.
 5. **Mirrored model copies** (D3/§4.6): models are deliberately mirrored on all nodes (operator practice); the only pure leftover is node2's flat `qwen3-embedding-0.6b`. Harmless either way — hostPath reads only the local copy.
 6. **GPU-7 external profile**: the PR #15 review's remaining blockers (Compose↔Spring datasource env mismatch, mock-provider dispatch, external routing strategy, model-ID rewriting, streaming, expanded acceptance tests) are gateway-code items in `deployments/external/` and the platform `gpu-gateway` module — tracked in PR #15, out of scope for this GPU-5 local-only plan. GPU-5 is unaffected: it runs `local-only` mode with no external dispatch.
+
+## 13. T-K8S-6a plan — execution-JWT signing + JWKS (planned 2026-09-25)
+
+**Goal:** unblock GPU-5 end-to-end execution (Gateway → Envoy → TEI/vLLM) per spec §12 and
+§17. **Scope:** T-K8S-6a (Gateway signing + JWKS), the Envoy changes it depends on (6b), and
+a readiness blocker found while planning (§13.2). GPU-7 is unaffected: spec §12 applies only
+to GPU-5, so `OpenAiProviderRuntime` is not touched.
+
+### 13.1 Current state
+
+| Part | State |
+|---|---|
+| Spec §12 | ES256; `iss=synanton-gpu-gateway`; `aud=gpu-plane-execution`; SHA-256 of the exact forwarded body bytes in the token; exactly two keys (current + previous); keys file-mounted, never passed via env or logged; JWKS at `/internal/.well-known/jwks.json`, cached 5 min; Envoy fails closed; Gateway ready before Envoy |
+| Envoy (6b) | `jwt_authn` with `remote_jwks` → `gpu-gateway:8090`; checks signature, `iss`, `aud` and `exp`; the `/` prefix requires a valid token (`blueprints/envoy/envoy-config.yaml`, Helm `templates/envoy.yaml`) |
+| Manifests | Secret `gpu-gateway-jwt-keys` mounted **optionally** at `/etc/gpu-gateway/keys`; NetworkPolicy reserves ingress :8090 for Envoy |
+| **Gateway** | **Signs nothing and serves nothing on :8090.** `VllmRuntime` (execute, stream, ping) and `VllmModelManager` send plain HTTP to Envoy |
+
+### 13.2 Blocker found while planning: model-readiness poll through Envoy
+
+Before every local dispatch, `ExecuteService.loadAndDispatchLocal` calls
+`VllmModelManager.getStatus()`, i.e. `GET {vllm-endpoint}/v1/models`, and expects the model ID
+to be listed. With `vllm-endpoint: http://envoy:8080` that can never succeed:
+- Envoy has no `/v1/models` route; it routes only `/v1/chat/completions`, `/v1/embeddings`, `/v1/rerank` and `/v1/score`.
+- One endpoint fronts three backends, so the question is ambiguous.
+- The call carries no JWT.
+
+Every local execution would sit in `MODEL_LOADING` for `model-load-timeout-ms` (600 s) and then
+fail with `MODEL_LOAD_FAILED`. The `GetStatus` liveness ping (`GET {envoy}/health`) fails the
+same way. **T-K8S-6a alone would not make GPU-5 work end to end, so this fix is part of the plan.**
+
+### 13.3 Decisions (user-confirmed 2026-09-25)
+
+| # | Decision | Chosen | Rejected |
+|---|---|---|---|
+| J1 | JWKS listener | Dedicated **JDK `HttpServer` on :8090** (Gateway lifecycle), one path only; actuator stays on :8091 | Second Tomcat connector (more framework coupling; the controller would also be reachable on :8091 unless filtered) |
+| J2 | Body-hash enforcement | **Claim now, enforce later.** 6a emits `body_sha256`; Envoy verifies signature, `iss`, `aud` and `exp`; enforcement is a tracked 6b follow-up. Stock `jwt_authn` can't compare a claim with the body, and Envoy's Lua API has no SHA-256 | Pure-Lua SHA-256 filter now (unmeasured latency on bodies up to 4 MB); `ext_authz` sidecar (most moving parts) |
+| J3 | Model readiness (§13.2) | **Static readiness** for Envoy-fronted LOCAL models. Each GPU-5 model is an always-on pod and Kubernetes readiness is authoritative, so skip the `/v1/models` poll. A down backend surfaces as Envoy 503, which the Gateway treats as NOT_ACCEPTED (retryable). The ping goes to a signed Envoy `/healthz` route, or is disabled | Per-backend Envoy `/models/<backend>` routes + per-model readiness paths in the catalog |
+
+### 13.4 Design
+
+1. **Key material** (`gpu-gateway.execution-jwt.key-dir`, default `/etc/gpu-gateway/keys`, from Secret `gpu-gateway-jwt-keys`):
+   - Files: `current.key` (PKCS#8, P-256), `current.pub` and `previous.pub` (SPKI PEM). The previous key's private half is not needed, because only the current key signs.
+   - Startup checks, all fail closed (§5.5):
+     - every key is P-256;
+     - `current.key`/`current.pub` are a pair (sign-then-verify);
+     - there are exactly two public keys, and they differ;
+     - files are read from disk only, never from the environment.
+   - Logs name only each key's `kid` (the RFC 7638 JWK thumbprint).
+   - The Phase 5 command in §7 changes: `openssl ecparam -genkey` writes SEC1, which the JDK can't read. Instead, two pairs are generated with `openssl genpkey -algorithm EC -pkeyopt ec_paramgen_curve:P-256` plus `openssl pkey -pubout`. The previous private key is discarded.
+   - Rotation (T-K8S-25, out of scope): previous := current, current := new, then restart the Gateway. Envoy picks up the new JWKS within its 5-minute cache.
+2. **Signer** — JDK only (`SHA256withECDSAinP1363Format` yields the raw JWS `r‖s`), no new dependency.
+   - Header: `{"alg":"ES256","typ":"JWT","kid":…}`.
+   - Claims:
+     - `iss`, `aud`: the spec values;
+     - `iat`, `nbf`, and `exp` = iat + `ttl-seconds` (default 60, max 300; Envoy only checks at arrival);
+     - `jti` = execution ID;
+     - `sub` = caller mTLS principal, `tenant_id`, `op`, `model` (logical ID);
+     - `body_sha256` = base64url(SHA-256(exact body bytes)).
+3. **Attaching the token.** `Authorization: Bearer <jwt>` goes on every Gateway→Envoy request: `VllmRuntime.execute`, `executeStreaming` and `ping`.
+   - `VllmRuntime` builds the body bytes once, hashes them, and publishes that same array. This is required because streaming re-serializes the payload after adding `stream`/`include_usage`.
+   - A GET signs the hash of an empty body.
+   - It is only active when `execution-jwt.enabled`.
+4. **JWKS listener (J1).** `GET /internal/.well-known/jwks.json` on `jwks-port` (8090).
+   - It returns both public keys as JWK (`kty EC`, `crv P-256`, `x`, `y`, `kid`, `use sig`, `alg ES256`) with `Cache-Control: max-age=300`.
+   - Every other path/method gets 404/405.
+   - No authentication: the NetworkPolicy admits Envoy only.
+5. **Readiness.** A new `executionJwt` health indicator joins the readiness group: keys loaded and the listener bound. So the Gateway is ready before Envoy, whose readiness waits for its JWKS fetch (spec §12).
+6. **Configuration.** `gpu-gateway.execution-jwt.{enabled, key-dir, issuer, audience, ttl-seconds, jwks-port}`, defaulting to the spec §12 values.
+   - `enabled: true` is set only in `gateway-local.yaml` (blueprint + Helm).
+   - `GatewayStartupValidator`: enabled without valid keys fails startup.
+7. **Static readiness (J3).**
+   - `dispatch.model-readiness: static` for the Envoy-fronted local profile: no `/v1/models` polling.
+   - The existing polling behaviour stays the default for other local setups.
+   - The `GetStatus` ping uses a signed `GET /healthz`, served by an Envoy direct response.
+8. **Envoy (6b changes needed here):**
+   - add a `/healthz` route (direct response 200, still behind `jwt_authn`);
+   - set `forward: false`, so the token isn't passed on to TEI/vLLM;
+   - keep `remote_jwks` fail-closed;
+   - `body_sha256` enforcement stays a 6b follow-up (J2).
+9. **Manifests and docs:**
+   - `gateway.yaml` + Helm: the Secret becomes **required**; `containerPort` 8090 and Service port 8090; config keys;
+   - the NetworkPolicy comment ("reserved") becomes active;
+   - §7 key commands; `docs/troubleshooting.md` (401 / JWKS diagnosis);
+   - this §12 items 2 and 3; spec §12 addendum (claim names, key files, listener).
+
+### 13.5 Tests
+
+- **Unit (gpu-gateway):**
+  - the signer, verified through the published JWKS key: claims, `exp`, and that `body_sha256` equals the SHA-256 of the bytes actually sent;
+  - the `kid` against the RFC 7638 §3.1 test vector;
+  - the key loader rejects: missing file, SEC1 key, wrong curve, mismatched pair, identical current/previous, a third key;
+  - the JWKS listener: both keys, cache header, 404 elsewhere;
+  - `VllmRuntime` attaches the token on unary, stream and ping (local `HttpServer`, as in `OpenAiProviderRuntimeHeadersTest`);
+  - static readiness skips the poll;
+  - the readiness indicator.
+- **Local end-to-end without GPUs:** `deployments/homelab/scripts/envoy-jwt-local-test.sh`. It uses docker compose with the real Gateway (strategy `direct`, `vllm-endpoint` = Envoy), the **pinned Envoy image and the real envoy config** (hostnames adapted), and mock TEI/vLLM backends. Spec cases covered:
+  - §24.1.10: Gateway-signed EMBED/SYNTHESIZE/RERANK and a stream reach the mocks;
+  - §24.2.6: unsigned, wrong key, expired or wrong `aud` → 401;
+  - §24.2.7: JWKS unavailable → fail closed;
+  - rotation: a token signed with the previous key verifies while its key is still in the JWKS.
+- **Cluster:** Phase 5 exit criteria (§7), then phase 9 and the §24 suite.
+
+### 13.6 Steps (one commit each)
+
+| # | Item | Needs |
+|---|---|---|
+| 1 | Spec §12 addendum (claim names, key files, :8090 listener, TTL) + this plan | — |
+| 2 | Key loader + ES256 signer + unit tests | — |
+| 3 | JWKS listener + readiness indicator + startup validation + tests | — |
+| 4 | Token on every Gateway→Envoy call (`VllmRuntime` body-bytes refactor) + tests | — |
+| 5 | Static readiness + signed `/healthz` ping (J3) + tests | — |
+| 6 | Manifests, Helm, NetworkPolicy, Envoy `forward: false` + `/healthz`, §7 commands, troubleshooting | — |
+| 7 | Local Envoy end-to-end script + run | Docker pull of the pinned Envoy image |
+| 8 | Cluster Phase 5 run → §11 baselines, status docs (this plan's status, README, spec §1a) | **Operator:** create `gpu-gateway-jwt-keys` (§7), push the Gateway image, run `deploy.sh gateway envoy` |
+
+Steps 1–7 need no GPU and no external provider. After step 8, the platform retrieval
+benchmark's bge-base T02/T03 rows and the reranker rows (T10/T11, `synanton-qwen3-reranker-0.6b`)
+become runnable on GPU-5.
+
+**Follow-ups (not in 6a):**
+- `body_sha256` enforcement in Envoy (6b; J2 options, measured).
+- JWT/JWKS rotation automation (T-K8S-25).
