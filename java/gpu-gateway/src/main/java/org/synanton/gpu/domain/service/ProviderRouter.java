@@ -82,7 +82,7 @@ public class ProviderRouter {
         if (!isExternal()) {
             // GPU-5 local path; explicit OPENAI requests still dispatch externally
             // (mixed-mode gateway behavior predating this router, preserved).
-            if (request.getProvider() == Provider.EXTERNAL_OPENAI) {
+            if (request.getProvider() == Provider.OPENAI) {
                 return externalDecision(logicalModelId, operation);
             }
             return RoutingDecision.local(logicalModelId, operation, vllmEndpoint);
