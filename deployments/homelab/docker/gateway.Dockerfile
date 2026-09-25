@@ -1,23 +1,23 @@
-# GPU Gateway image blueprint (T-K8S-1).
-# Build context: repo root (needs the Gradle build output).
+# GPU Gateway image (T-K8S-1). Build context: repo root, after `./gradlew bootJar`.
 #
-#   ./gradlew bootJar
+#   ./gradlew :java:gpu-gateway:bootJar
 #   docker build -f deployments/homelab/docker/gateway.Dockerfile \
 #     -t local-registry:5000/gpu-gateway:0.1.0 .
 #   docker push local-registry:5000/gpu-gateway:0.1.0
 #
-# Base image is mirrored into the local registry by scripts/mirror-images.sh.
-# At freeze, pin the base by digest (spec §8) and rebuild.
-FROM local-registry:5000/eclipse-temurin:21-jre
+# GPU-5 (homelab) uses the mirrored base from local-registry:5000 (scripts/mirror-images.sh).
+# GPU-7 (compose) builds with the public base:  --build-arg BASE_IMAGE=eclipse-temurin:21-jre
+# At freeze, pin the base by digest (Deployment Plan §8) and rebuild.
+ARG BASE_IMAGE=local-registry:5000/eclipse-temurin:21-jre
+FROM ${BASE_IMAGE}
 
-# bootJar output of the root project (adjust if the runnable jar moves to
-# java/gpu-gateway/build/libs during T-K8S-1)
-ARG JAR_FILE=build/libs/gpu-execution-plane-0.1.0-SNAPSHOT.jar
+# bootJar output of the gateway module (the root project has no runnable jar)
+ARG JAR_FILE=java/gpu-gateway/build/libs/gpu-gateway-0.1.0-SNAPSHOT.jar
 COPY ${JAR_FILE} /app/gpu-gateway.jar
 
-# Packaged OpenAPI artifact (T-K8S-1a): copied FROM the canonical artifact,
-# never independently authored (spec §4.1). CI enforces equality.
-COPY java/gpu-contract/src/main/resources/openapi/openapi.yaml /app/openapi/openapi.yaml
+# The contract is the protobuf in java/gpu-contract (compiled into the jar);
+# there is no OpenAPI artifact (Deployment Plan v3.0.0 §4.1, §15).
 
-EXPOSE 8080 8090 8091
+# 9090 gRPC synanton.gpu.v1 (the API) · 8091 actuator health/metrics
+EXPOSE 9090 8091
 ENTRYPOINT ["java", "-jar", "/app/gpu-gateway.jar"]

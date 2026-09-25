@@ -1,10 +1,10 @@
 # GPU-7 external-provider profile (spec §2.3/§26): Gateway + PostgreSQL + mock provider.
 # No GPU, no Envoy, no vLLM, no execution JWT. Single-node container deployment.
 #
-# Prereq: build the gateway image from the repo root first —
-#   ./gradlew bootJar
-#   docker build -f deployments/homelab/docker/gateway.Dockerfile -t gpu-gateway:0.1.0 .
-# Then: cp .env.example .env  (fill in),  docker compose up -d
+# API: gRPC synanton.gpu.v1 on localhost:9090 (Deployment Plan v3.0.0 §4).
+# Prereq (repo root):  ./gradlew :java:gpu-gateway:bootJar
+# Then here:           cp .env.example .env  (fill in)
+#                      docker compose up -d --build && ./scripts/smoke-test.sh
 name: gpu-7-external
 
 services:
@@ -43,6 +43,11 @@ services:
 
   gateway:
     image: gpu-gateway:0.1.0
+    build:
+      context: ../..                                   # repo root; run ./gradlew :java:gpu-gateway:bootJar first
+      dockerfile: deployments/homelab/docker/gateway.Dockerfile
+      args:
+        BASE_IMAGE: eclipse-temurin:21-jre             # public base for the single-node profile
     depends_on:
       postgres:
         condition: service_healthy
@@ -57,20 +62,19 @@ services:
       # The external deployment contract is merged over the bundled application.yml.
       # (GPU_PROVIDER_CONFIG was never read by the app — this is the working mechanism.)
       SPRING_CONFIG_ADDITIONAL_LOCATION: file:/etc/gpu-gateway/gateway-external.yaml
-      # deployment-contract vars below are wired by the HTTP-face / auth tickets,
-      # not yet read by the current gRPC-only build — kept for contract stability
-      GPU_DEPLOYMENT_MODE: external-only # §5.4; anything else must fail closed (§5.5)
-      GPU_API_KEY_PEPPER: ${GPU_API_KEY_PEPPER:?set in .env}
+      # Deployment mode is gpu-gateway.dispatch.strategy=external in the mounted config
+      # (unknown strategies fail startup, Plan §5.5). No API-key pepper: API keys are not
+      # part of the contract (Plan v3.0.0 §13).
       # provider credentials arrive as env vars referenced from config (§29)
       MOCK_PROVIDER_API_KEY: ${MOCK_PROVIDER_API_KEY:?set in .env}
       OPENAI_API_KEY: ${OPENAI_API_KEY:-} # optional real provider arm
     volumes:
       - ./config/gateway-external.yaml:/etc/gpu-gateway/gateway-external.yaml:ro
     ports:
-      - "9090:9090" # gRPC API (the live surface: Execute/Cancel/GetStatus/GetCapacity/GetModels)
-      - "127.0.0.1:8091:8091" # actuator health/metrics, localhost only
-      # port 8080 (public OpenAI-compatible HTTP face, §5/§10) is NOT exposed by the
-      # current build — it arrives with the HTTP-face ticket; see the plan's status.
+      # gRPC synanton.gpu.v1 — plaintext until mTLS (T-K8S-7/8): bound to localhost so
+      # it is never published to untrusted networks (Plan v3.0.0 §13.1)
+      - "127.0.0.1:9090:9090"
+      - "127.0.0.1:8091:8091" # actuator health/metrics
     restart: unless-stopped
 
 volumes:

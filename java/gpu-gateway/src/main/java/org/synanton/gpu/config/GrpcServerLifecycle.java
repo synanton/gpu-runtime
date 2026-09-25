@@ -36,6 +36,19 @@ public class GrpcServerLifecycle implements SmartLifecycle {
                     .build()
                     .start();
             log.info("gRPC server started on port {}", server.getPort());
+            // gRPC-Netty threads are daemon threads and this service has no servlet
+            // container, so without a non-daemon waiter the JVM exits right after
+            // startup (observed in the GPU-7 compose run). Block a non-daemon thread
+            // until the server terminates; stop() shuts the server down, releasing it.
+            Thread awaiter = new Thread(() -> {
+                try {
+                    server.awaitTermination();
+                } catch (InterruptedException e) {
+                    Thread.currentThread().interrupt();
+                }
+            }, "grpc-server-awaiter");
+            awaiter.setDaemon(false);
+            awaiter.start();
         } catch (IOException e) {
             throw new IllegalStateException(
                     "Failed to start gRPC server on port " + properties.getGrpcPort(), e);
