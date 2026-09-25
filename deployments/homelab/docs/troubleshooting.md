@@ -71,7 +71,8 @@ Causes, in order of likelihood:
    kubectl -n gpu-plane exec deploy/envoy -- wget -qO- http://gpu-gateway:8090/internal/.well-known/jwks.json
    ```
    Expect two keys. Also check the NetworkPolicy (Envoy → gateway :8090) and the gateway Service port `jwks`.
-4. **Clock skew between node1 and the Gateway pod.** Tokens live 60 s (`execution-jwt.ttl-seconds`), and Envoy allows 60 s of skew.
+4. **Wrong audience/issuer** gets **403**, not 401 ("Audiences in Jwt are not allowed"). Check `execution-jwt.audience` against the Envoy provider `audiences`.
+5. **Clock skew between node1 and the Gateway pod.** Tokens live 60 s (`execution-jwt.ttl-seconds`), and Envoy allows 60 s of skew.
 
 The Gateway reports these as `execution_jwt_rejected` (non-retryable) in `ErrorInfo.code`.
 
