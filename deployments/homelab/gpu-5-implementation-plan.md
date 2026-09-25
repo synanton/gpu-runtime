@@ -114,7 +114,7 @@ ssh node2 'test -f /mnt/local-fast/models/qwen3-reranker-0.6b/config.json && du 
 ssh node3 'test -f /mnt/local-fast/models/qwen3-4b-instruct-2507/config.json && du -sh /mnt/local-fast/models/qwen3-4b-instruct-2507'   # 7.6G
 
 # 4.4 Path normalization to the canonical /mnt/local-fast/models/<model> layout
-# DONE 2026-09-23 — first pass (node2 qwen3-4b; node3 embedding+reranker).
+# DONE 2026-09-23 — first pass under the since-retracted layout (historical log only).
 # DONE 2026-09-24 — swap pass for the D2 topology (executed and verified):
 ssh node2 'mv /mnt/local-fast/qwen3-reranker-0.6b /mnt/local-fast/models/'   # reranker moves with its role
 ssh node3 'mv /mnt/local-fast/qwen3-4b-instruct-2507 /mnt/local-fast/models/' # synthesis moves to node3

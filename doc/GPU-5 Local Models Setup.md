@@ -1,12 +1,9 @@
 # GPU-5 Local Models Setup
 
-> **Placement update (2026-09-24, PR #15 review):** GPU-5 runs **one inference
-> workload per physical GPU**. Embedding runs on **node1** (GTX 1650, TEI +
-> BGE-base), reranking on **node2** (RTX 4060 Ti, vLLM), synthesis on **node3**
-> (RTX 5060 Ti, vLLM). The earlier two-container/one-GPU colocation was
-> retracted (invalid device-plugin design, PR #15 P0.1); the 2026-09-23
-> "reranker on node1" layout is obsolete. Authoritative placement rationale:
-> `deployments/homelab/gpu-5-implementation-plan.md` (D2/D4, §4).
+> **Canonical placement (PR #15):** one inference workload per physical GPU —
+> **node1** embedding (GTX 1650, TEI + BGE-base), **node2** reranking (RTX 4060 Ti,
+> vLLM), **node3** synthesis (RTX 5060 Ti, vLLM). This is the only supported layout;
+> rationale: `deployments/homelab/gpu-5-implementation-plan.md` (D2/D4, §4).
 >
 > **State 2026-09-24:** Qwen3 models verified in place post-swap. BGE-base is
 > **complete on all nodes** (models are mirrored everywhere by operator practice);
