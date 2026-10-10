@@ -20,6 +20,43 @@ node2, `speech-stt-tts` on node3) — the two projects cannot share a node.
 Scale the speech Deployment to 0 rather than deleting GPU-5 pods. (Within
 gpu-plane there is exactly one GPU pod per node by design — plan D2.)
 
+## GPU pod stuck Pending/AdmissionError with nothing Running (orphaned container)
+
+Symptom: node Capacity shows `nvidia.com/gpu: 1`, kubectl shows no Running
+pod, yet every new pod fails with `Allocate failed ... Available: 0` (or an
+admitted pod's container dies instantly with `nvidia-smi not found` — a
+phantom allocation with no device injected). Root cause (observed 2026-10-10):
+a containerd container holding VRAM whose pod object is already deleted —
+invisible to kubectl, self-sustaining the lockout. Deleting pods cannot fix
+it; the ReplicaSet churn only adds zombies.
+
+Diagnose from any host with ssh (no sudo needed):
+
+```bash
+ssh node1 "nvidia-smi --query-compute-apps=pid --format=csv,noheader"
+# any pid listed while no pod runs in gpu-plane == the orphan
+ssh node1 "ps -o pid,ppid,cmd -p <pid>"   # parent is containerd-shim, not kubelet
+```
+
+Fix on the node (sudo):
+
+```bash
+sudo ctr -n k8s.io tasks kill -s SIGKILL <container-id>  # id from the shim cmdline
+sudo ctr -n k8s.io containers rm <container-id>
+nvidia-smi --query-compute-apps=pid --format=csv   # expect header only
+```
+
+Then delete the failed pods once and let a single fresh pod schedule. If the
+fault recurs after a driver change, also clear the kubelet device-plugin
+checkpoint (`sudo rm /var/lib/kubelet/device-plugins/kubelet_internal_checkpoint`
++ `sudo systemctl restart kubelet`) — stale checkpoints produce the same
+Available: 0 signature with a different cause.
+
+Prevention: never shuffle GPU replicas without the pre-flight in
+`platform/scripts/bench-tei-swap.sh` (VRAM-empty + allocatable checks), and
+keep the orphan watchdog (`platform/scripts/bench-tei-orphan-watch.sh`, cron
+on node0 every 5 min) installed — it alerts exactly on held-VRAM-with-no-Running-pod.
+
 ## vLLM pod CrashLoopBackOff / OOM at startup
 
 1. **Model path wrong.** `hostPath` must point at the *normalized* layout
