@@ -106,6 +106,20 @@ echo
 echo "== quiesced. Current '${NAMESPACE}' namespace state:"
 kubectl -n "${NAMESPACE}" get pods -o wide
 
+echo
+echo "== verifying no VRAM holders survive on workers (orphaned containers have"
+echo "   no pod objects and persist past drain - they lock out the next start)"
+for n in "${WORKERS[@]}"; do
+  holders="$(ssh -o ConnectTimeout=10 "$n" \
+    "nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null" | grep -vc '^$' || true)"
+  if [[ "${holders}" != "0" ]]; then
+    echo "warning: ${holders} compute process(es) still hold the GPU on ${n} with no pods left - orphaned container(s)." >&2
+    echo "  Clear before the next start (node sudo): ctr -n k8s.io tasks kill -s SIGKILL <cid>; ctr -n k8s.io containers rm <cid>" >&2
+  else
+    echo "  ${n}: VRAM free"
+  fi
+done
+
 if ! $POWEROFF; then
   cat <<EOF
 

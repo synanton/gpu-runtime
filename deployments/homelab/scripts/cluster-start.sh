@@ -105,7 +105,22 @@ if [[ ${#GPU_DEPLOYMENTS[@]} -gt 0 ]]; then
       sleep 3
     done
   done
-  for d in "${GPU_DEPLOYMENTS[@]}"; do restore "$d"; done
+  echo "== checking for VRAM holders with no live pods (orphaned containers lock out admission)"
+for n in "${WORKERS[@]}"; do
+  holders="$(ssh -o ConnectTimeout=10 "$n" \
+    "nvidia-smi --query-compute-apps=pid --format=csv,noheader 2>/dev/null" | grep -vc '^$' || true)"
+  if [[ "${holders}" != "0" ]]; then
+    echo "ABORT: ${holders} compute process(es) hold the GPU on ${n} before any workload was restored." >&2
+    echo "These are orphaned containerd containers (no pod objects own them) - restoring now" >&2
+    echo "recreates the 2026-10-10 lockout. Diagnose and clear first:" >&2
+    echo "  ssh ${n} \"ps -o pid,ppid,cmd -p \$(nvidia-smi --query-compute-apps=pid --format=csv,noheader | tr '\n' ',')\"" >&2
+    echo "  (node sudo) ctr -n k8s.io tasks kill -s SIGKILL <cid>; ctr -n k8s.io containers rm <cid>" >&2
+    echo "See troubleshooting.md, orphaned-GPU-container entry." >&2
+    exit 1
+  fi
+  echo "-- ${n}: VRAM free"
+done
+for d in "${GPU_DEPLOYMENTS[@]}"; do restore "$d"; done
 fi
 
 echo "== waiting for '${NAMESPACE}' Deployments to roll out"
