@@ -57,6 +57,35 @@ Prevention: never shuffle GPU replicas without the pre-flight in
 keep the orphan watchdog (`platform/scripts/bench-tei-orphan-watch.sh`, cron
 on node0 every 5 min) installed — it alerts exactly on held-VRAM-with-no-Running-pod.
 
+## K8s GPU injection absent cluster-wide (2026-10-11)
+
+Symptom: pods admit (get IPs) but containers start with no NVIDIA devices
+(`libcuda.so.1` missing; TEI entrypoint dies on `nvidia-smi not found`),
+on all workers. Plugin advertises capacity, checkpoint empty, no holders.
+
+Cause chain: the plugin runs `DEVICE_LIST_STRATEGY=envvar`, but containerd
+has only `runc` + `enable_cdi` (no nvidia runtime, no hooks) — nothing
+consumes the env injection path. The local v0.20.0 plugin build crashes
+instantly on `cdi-annotations` (all nodes), so the working pairing is
+unrepresentable with the current image. Independent fault found en route:
+node driver↔libs skew (node2: module 595.84 vs libs 595.99.02 — even host
+`nvidia-smi` failed); converged all nodes to 595.99.02.
+
+Workaround: serve TEI from manual docker (`--gpus all` path is independent
+of K8s injection) until a CDI-capable plugin build lands. Do not "fix" by
+flipping the strategy flag — it crash-loops the DaemonSet.
+
+## Time-slicing for bench coexistence (2026-10-11, proven)
+
+ConfigMap `nvidia-device-plugin-config` (`sharing.timeSlicing:
+[{nvidia.com/gpu, replicas: 2}]`, no rename) + `CONFIG_FILE` env and volume
+mount on the device-plugin DaemonSet → allocatable 2 per worker. Both TEI
+deployments serve concurrently on node1's 4GB card at bench scale.
+Revert: remove the env/volume, allocatable returns to 1.
+Caveat: plan D2's one-workload-per-GPU rule stands for PROD workloads
+(reranker/synthesis) — time-slicing is bench-coexistence only until
+load-tested under production pressure.
+
 ## vLLM pod CrashLoopBackOff / OOM at startup
 
 1. **Model path wrong.** `hostPath` must point at the *normalized* layout
