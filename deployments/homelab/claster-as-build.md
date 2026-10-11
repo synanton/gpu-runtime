@@ -31,16 +31,28 @@ in their own namespaces (e.g. `gpu-k8s`'s
 
 ## GPU
 
-- NVIDIA GPU Operator's device plugin DaemonSet
-  (`nvidia-device-plugin-daemonset`, `kube-system`) runs on the 3 GPU
-  workers only (`node1`-`node3`) - `node0` has no GPU and isn't targeted.
+- Device plugin DaemonSet (`nvidia-device-plugin-daemonset`, `kube-system`,
+  hand-managed — no GPU Operator in this cluster) runs on the 3 GPU workers
+  only (`node1`-`node3`) - `node0` has no GPU and isn't targeted.
+  Image: `local-registry:5000/k8s-device-plugin:v0.21.0` (local build from
+  upstream main + debian12-base patch; v0.20.0 kept as rollback).
+  Strategy: `DEVICE_LIST_STRATEGY=envvar` (the build crashes on
+  `cdi-annotations` — do not flip without retesting).
 - `RuntimeClass nvidia` (handler `nvidia`) is what workload Pods set via
-  `runtimeClassName: nvidia` to get GPU access - see any GPU-requesting
-  Deployment in `speech-to-speech-k8s/k8s/` for the pattern.
-- Each GPU node exposes exactly `nvidia.com/gpu: 1` (one physical GPU, not
-  MIG-partitioned or time-sliced) - see that repo's `docs/architecture.md`
-  "GPU scheduling constraint" for what this means for scheduling two
-  GPU-requesting Deployments onto one node.
+  `runtimeClassName: nvidia` to get GPU access - REQUIRED, not optional:
+  without it containers start with no NVIDIA devices (observed 2026-10-11).
+  See any GPU-requesting Deployment for the pattern.
+- Time-slicing is ACTIVE cluster-wide (ConfigMap
+  `nvidia-device-plugin-config`, replicas: 2): each GPU node exposes
+  `nvidia.com/gpu: 2`. Bench-only dispensation from the one-workload rule;
+  PROD workloads stay unshared until load-tested. Revert: remove
+  `CONFIG_FILE` env + volume from the DaemonSet.
+- Driver inventory (converged 2026-10-11, all nodes): kernel + user-space
+  **615.71.09** (CUDA 13.4). Mirrored pin:
+  `local-registry:5000/gpu-operator/driver:615.71.09-ubuntu24.04`.
+  Rule learned the hard way: driver, libs, and toolkit upgrade as a locked
+  triple — a split (module 595.84 vs libs 595.99) breaks NVML cluster-wide
+  while host `nvidia-smi` looks healthy.
 
 ## Storage
 
