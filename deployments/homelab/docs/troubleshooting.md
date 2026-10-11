@@ -75,6 +75,17 @@ Workaround: serve TEI from manual docker (`--gpus all` path is independent
 of K8s injection) until a CDI-capable plugin build lands. Do not "fix" by
 flipping the strategy flag — it crash-loops the DaemonSet.
 
+## Time-slicing for bench coexistence (2026-10-11, proven)
+
+ConfigMap `nvidia-device-plugin-config` (`sharing.timeSlicing:
+[{nvidia.com/gpu, replicas: 2}]`, no rename) + `CONFIG_FILE` env and volume
+mount on the device-plugin DaemonSet → allocatable 2 per worker. Both TEI
+deployments serve concurrently on node1's 4GB card at bench scale.
+Revert: remove the env/volume, allocatable returns to 1.
+Caveat: plan D2's one-workload-per-GPU rule stands for PROD workloads
+(reranker/synthesis) — time-slicing is bench-coexistence only until
+load-tested under production pressure.
+
 ## vLLM pod CrashLoopBackOff / OOM at startup
 
 1. **Model path wrong.** `hostPath` must point at the *normalized* layout
