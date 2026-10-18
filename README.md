@@ -216,6 +216,23 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 | GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
 | **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Contract defined; implementation done except execution-JWT (T-K8S-6a); acceptance blocked on T-K8S-6a + PoC run** |
 | **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Complete for contract v3.1.0; §37 acceptance passing; freeze attestation pending sign-off** |
+
+### Status update 2026-10-11 (bench-serving state; not a milestone change)
+
+- **Drivers converged cluster-wide: 615.71.09** (node1 GTX 1650 / node2 RTX
+  4060 Ti / node3 RTX 5060 Ti; CUDA 13.4). Fixes the Sep/Oct skew (module
+  595.84 vs libs 595.99) that broke NVML cluster-wide. Mirror pin:
+  `local-registry:5000/gpu-operator/driver:615.71.09-ubuntu24.04`.
+- **Device plugin v0.21.0** (local rebuild from current upstream main;
+  v0.20.0 kept as rollback) + **time-slicing live** (replicas: 2, allocatable
+  2/worker). Both TEI deployments serve concurrently on node1.
+- **Serving for bench (verified):** TEI bge-base-768d + bge-small-384d
+  (node1, K8s NodePorts :30800/:30801); vLLM Qwen3-Reranker-0.6B (node2,
+  bench NodePort :30802, QWEN3 template required — scores invert without it).
+  Gateway/Envoy/Postgres/vLLM-synthesis parked at 0 (unchanged scope).
+- **GPU-7:** external compose stack up (mock provider); live arms
+  (opencode.ai/OpenRouter) not re-verified since 2026-09-25 — OpenRouter arm
+  remains unreachable from this network.
 | **GPU-6** | **Production deployment and operational hardening** | **Deferred — not a GPU-5/GPU-7 gate** |
 
 ### Status: contract vs. implementation vs. acceptance (2026-09-25, PR #15)
