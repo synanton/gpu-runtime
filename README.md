@@ -220,7 +220,7 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 | GPU-2 | Domain core & persistence | Complete |
 | GPU-3 | Runtime & model lifecycle | Complete |
 | GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
-| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Workload path implemented; cluster phase 5 validated 2026-09-25 including execution-JWT; load baselines and full §24 suite remain pending** |
+| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Selected cluster phase-5 requests validated 2026-09-25, including execution-JWT; this does not validate a complete/current homelab rollout. Load baselines and the full §24 suite remain pending** |
 | **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Contract v3.1.0; acceptance/package checks pass; live-provider evidence is dated in the status section; freeze attestation pending reviewer sign-off** |
 
 ### Historical status snapshot 2026-10-11 (bench-serving state; not a milestone change)
@@ -251,9 +251,9 @@ mTLS setup with self-signed certificates: [`doc/GPU Plane mTLS Setup.md`](doc/GP
 | --- | --- | --- |
 | **Deployment contract** | Defined | Defined (v3.1.0) |
 | **Implementation** | One workload per GPU (node1 TEI embedding, node2 vLLM reranker, node3 vLLM synthesis); Gateway routing ConfigMap; mTLS; streaming; **execution-JWT signing + JWKS (T-K8S-6a)**; static model readiness behind Envoy | **Complete:** mTLS + tenant authorization, provider registry, logical→provider rewrite, streaming, **Responses API**, canonical errors, circuit breaker, health, cost ledger, budget, sensitivity, kill switch (config + persisted runtime `GPUControlService`), multi-provider failover, upstream request IDs, zero-prompt logging verified, digest-pinned packaging |
-| **Acceptance** | **Cluster phase 5 passed:** EMBED/SYNTHESIZE/stream/RERANK through Gateway → Envoy (execution JWT) → the three GPUs; unsigned→401; direct backend access denied. Local end-to-end (`deployments/homelab/scripts/envoy-jwt-local-test.sh`) 17/17. **Pending:** load baselines and the full §24 suite | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md): opencode.ai arm 15/15 (current; cheap paid models, estimated spend $0.000063), OpenRouter free arm 20/20 (last run before OpenRouter became unreachable from this network); §46 checklist `tools/gpu7-package-check.py --live` 16/16. Freeze attestation (§49) awaits reviewer sign-off |
+| **Acceptance** | **Historical cluster phase-5 run (2026-09-25):** selected EMBED/SYNTHESIZE/stream/RERANK requests through Gateway → Envoy (execution JWT) → the three GPUs; unsigned→401; direct backend access denied. Local end-to-end (`deployments/homelab/scripts/envoy-jwt-local-test.sh`) 17/17. This is not full GPU-5 §24 acceptance or a current deployment check. **Pending:** load baselines and the full §24 suite | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md): opencode.ai arm 15/15 (current; cheap paid models, estimated spend $0.000063), OpenRouter free arm 20/20 (last run before OpenRouter became unreachable from this network); §46 checklist `tools/gpu7-package-check.py --live` 16/16. Freeze attestation (§49) awaits reviewer sign-off |
 
-**GPU-5 cluster phase 5 run (2026-09-25).** Single requests go through Gateway (gRPC mTLS, principal `synanton-platform`) → Envoy (ES256 execution JWT verified) → the GPU backends. Gateway image `gpu-gateway:0.1.0@sha256:8a747eb…`.
+**GPU-5 cluster phase 5 run (2026-09-25; historical, selected requests).** This records one tested cluster state, not a full rollout or current availability. Single requests went through Gateway (gRPC mTLS, principal `synanton-platform`) → Envoy (ES256 execution JWT verified) → GPU backends. Gateway image `gpu-gateway:0.1.0@sha256:8a747eb…`. Later demo-window deployment state is separate: see the 2026-10-21 integration note below.
 
 | Operation | Backend | Result | Latency |
 |---|---|---|---|
@@ -304,9 +304,13 @@ the safety net.
 - **Target models:** `bge-small-384d` is the demo/platform vector default
   (`:30801`); `bge-base-768d` is the GPU-5 primary (`:30800`). The platform's
   payload freeze is **384** until #23/ADR-013 says otherwise.
-- **Demo window:** the Gateway/Envoy stack is parked at scale-to-zero pending
-  the gpu-runtime **#23** decision (2026-10-31) and T-K8S-6a. The BM25 demo does
-  not depend on it; vector integration acceptance waits on that decision.
+- **Demo window (reviewed 2026-10-21):** the TEI `bge-small-384d` endpoint
+  (`:30801`) is provisioned but scaled to zero; whether it can be raised
+  independently for vector acceptance remains open in [gpu-runtime #23](https://github.com/synanton/gpu-runtime/issues/23)
+  (decision due 2026-10-31). T-K8S-6a is implemented and was exercised in the
+  historical phase-5 run above. The BM25 demo does not depend on the endpoint;
+  vector integration acceptance waits on #23 and is not established by the
+  September cluster run.
 
 GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introducing production-scale scheduling complexity.
 
