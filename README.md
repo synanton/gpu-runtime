@@ -263,6 +263,33 @@ GPU-5 model state: Qwen3 weights verified; `bge-base-en-v1.5` complete on all no
 (mirrored); `bge-small-en-v1.5` fallback complete on all nodes. Manual downloads use a `uv` venv +
 `HF_ENDPOINT=https://hf-mirror.com` workaround (Local Models Setup §4).
 
+### Available models on the nodes
+
+`/mnt/local-fast/models` is present on node1, node2 and node3. Node1 has a
+4 GB GTX 1650; node2 and node3 have 16 GB cards (RTX 4060 Ti / RTX 5060 Ti).
+The embedding and reranker models fit all three nodes; the 4B chat model is
+targeted at node2/node3.
+
+| Model | Type | Native dim | Size | Notes |
+|---|---|---|---|---|
+| `bge-small-en-v1.5` | embedding | 384 | 33M | Demo/platform vector default (`synanton-bge-small-embedding`, NodePort `:30801`) |
+| `bge-base-en-v1.5` | embedding | 768 | 110M | GPU-5 primary embedding (`synanton-bge-base-embedding`, NodePort `:30800`) |
+| `qwen3-embedding-0.6b` | embedding | ~1024 | 600M | Stronger option; **requires an ADR-013 re-benchmark before use** |
+| `bge-reranker-0.6b` | reranker | n/a | 600M | Future reranking track |
+| `qwen3-reranker-0.6b` | reranker | n/a | 600M | GPU-5 reranker; QWEN3 prompt template required |
+| `qwen3-4b-instruct` | chat | n/a | 4B | GPU-5 synthesis (node3) |
+
+**Model choice is not a hardware decision.** bge-small remains the demo
+embedding because it is the model measured by ADR-013 at 384d; a GPU makes a
+larger model feasible, but switching to bge-base or qwen3-embedding requires
+re-running the ADR-013 benchmark (recall@k, MRR, latency) and re-indexing.
+Availability is not evidence of quality.
+
+**Dimension warning:** three embedding models with three dimensions are on
+disk. A model swap without a matching dimension/config change is one env var
+away from a misconfiguration; the platform's startup capability assertion is
+the safety net.
+
 GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introducing production-scale scheduling complexity.
 
 ## Related Synanton projects
