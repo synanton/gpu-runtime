@@ -290,6 +290,18 @@ disk. A model swap without a matching dimension/config change is one env var
 away from a misconfiguration; the platform's startup capability assertion is
 the safety net.
 
+### Platform integration status (2026-10-21)
+
+- **Sole compute plane:** the platform consumes EMBED through the
+  `synanton.gpu.v1` client (`GpuPlaneEmbedClient`, platform #356): `GetModels`
+  capability read, pluggable execution-JWT attachment, and client-side batching.
+- **Target models:** `bge-small-384d` is the demo/platform vector default
+  (`:30801`); `bge-base-768d` is the GPU-5 primary (`:30800`). The platform's
+  payload freeze is **384** until #23/ADR-013 says otherwise.
+- **Demo window:** the Gateway/Envoy stack is parked at scale-to-zero pending
+  the gpu-runtime **#23** decision (2026-10-31) and T-K8S-6a. The BM25 demo does
+  not depend on it; vector integration acceptance waits on that decision.
+
 GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introducing production-scale scheduling complexity.
 
 ## Related Synanton projects
