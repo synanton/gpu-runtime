@@ -1,5 +1,11 @@
 # Synanton GPU Runtime
 
+> **Documentation status (2026-10-21):** GPU-5's request-path demonstration is
+> validated, but its load baselines and complete acceptance suite remain open.
+> GPU-7's local acceptance/package checks are passing; freeze attestation still
+> awaits review. Neither status means production readiness. See [status below](#roadmap)
+> and the [documentation index](doc/README.md).
+
 [![Status](https://img.shields.io/badge/Status-Development-blue)](https://github.com/Synanton/gpu-runtime)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green)](https://spring.io/projects/spring-boot)
@@ -214,10 +220,10 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 | GPU-2 | Domain core & persistence | Complete |
 | GPU-3 | Runtime & model lifecycle | Complete |
 | GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
-| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Contract defined; implementation done except execution-JWT (T-K8S-6a); acceptance blocked on T-K8S-6a + PoC run** |
-| **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Complete for contract v3.1.0; §37 acceptance passing; freeze attestation pending sign-off** |
+| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Workload path implemented; cluster phase 5 validated 2026-09-25 including execution-JWT; load baselines and full §24 suite remain pending** |
+| **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Contract v3.1.0; acceptance/package checks pass; live-provider evidence is dated in the status section; freeze attestation pending reviewer sign-off** |
 
-### Status update 2026-10-11 (bench-serving state; not a milestone change)
+### Historical status snapshot 2026-10-11 (bench-serving state; not a milestone change)
 
 - **Drivers converged cluster-wide: 615.71.09** (node1 GTX 1650 / node2 RTX
   4060 Ti / node3 RTX 5060 Ti; CUDA 13.4). Fixes the Sep/Oct skew (module
@@ -235,7 +241,7 @@ gpu-runtime/                               # generated from `git ls-files` (2026
   remains unreachable from this network.
 | **GPU-6** | **Production deployment and operational hardening** | **Deferred — not a GPU-5/GPU-7 gate** |
 
-### Status: contract vs. implementation vs. acceptance (2026-09-25, PR #15)
+### Evidence record — contract, implementation, acceptance (2026-09-25; reviewed 2026-10-21)
 
 The platform transport is **gRPC `synanton.gpu.v1` over mTLS** on :9090 (Deployment
 Plan v3.1.0 §4, §13). There is no REST API; actuator (health/metrics) runs on :8091.
@@ -469,7 +475,7 @@ Apache 2.0 License – see [LICENSE](LICENSE).
 
 ## References
 
-- [Synanton Design v1.21 (current)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.21.md)
-- [Synanton Design v1.20 (GPU Part VIII)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.20.md)
-- [Synanton Design v1.19 (baseline)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.19.md)
-- [Synanton Core README](https://github.com/Synanton/platform/blob/main/README.md)
+- [Platform Architecture 1.0 capstone](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-platform-architecture-1.0.md) — current platform-wide architecture and implementation status.
+- [Design 1.30 — AI and Model Runtime Plane](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.30.md) — current approved platform-owned runtime contract; approval is not implementation acceptance.
+- [Design 1.20 — GPU Execution Plane (historical)](https://github.com/synanton/platform/blob/main/docs/architecture/archive/synanton-design-1.20.md) — prior isolation architecture, retained as history and folded into later platform design.
+- [Platform README](https://github.com/synanton/platform/blob/main/README.md) and [this repository's documentation index](doc/README.md).
