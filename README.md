@@ -1,5 +1,11 @@
 # Synanton GPU Runtime
 
+> **Documentation status (2026-10-21):** GPU-5's request-path demonstration is
+> validated, but its load baselines and complete acceptance suite remain open.
+> GPU-7's local acceptance/package checks are passing; freeze attestation still
+> awaits review. Neither status means production readiness. See [status below](#roadmap)
+> and the [documentation index](doc/README.md).
+
 [![Status](https://img.shields.io/badge/Status-Development-blue)](https://github.com/Synanton/gpu-runtime)
 [![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green)](https://spring.io/projects/spring-boot)
@@ -214,10 +220,10 @@ gpu-runtime/                               # generated from `git ls-files` (2026
 | GPU-2 | Domain core & persistence | Complete |
 | GPU-3 | Runtime & model lifecycle | Complete |
 | GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
-| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Contract defined; implementation done except execution-JWT (T-K8S-6a); acceptance blocked on T-K8S-6a + PoC run** |
-| **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Complete for contract v3.1.0; §37 acceptance passing; freeze attestation pending sign-off** |
+| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Selected cluster phase-5 requests validated 2026-09-25, including execution-JWT; this does not validate a complete/current homelab rollout. Load baselines and the full §24 suite remain pending** |
+| **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Contract v3.1.0; acceptance/package checks pass; live-provider evidence is dated in the status section; freeze attestation pending reviewer sign-off** |
 
-### Status update 2026-10-11 (bench-serving state; not a milestone change)
+### Historical status snapshot 2026-10-11 (bench-serving state; not a milestone change)
 
 - **Drivers converged cluster-wide: 615.71.09** (node1 GTX 1650 / node2 RTX
   4060 Ti / node3 RTX 5060 Ti; CUDA 13.4). Fixes the Sep/Oct skew (module
@@ -235,7 +241,7 @@ gpu-runtime/                               # generated from `git ls-files` (2026
   remains unreachable from this network.
 | **GPU-6** | **Production deployment and operational hardening** | **Deferred — not a GPU-5/GPU-7 gate** |
 
-### Status: contract vs. implementation vs. acceptance (2026-09-25, PR #15)
+### Evidence record — contract, implementation, acceptance (2026-09-25; reviewed 2026-10-21)
 
 The platform transport is **gRPC `synanton.gpu.v1` over mTLS** on :9090 (Deployment
 Plan v3.1.0 §4, §13). There is no REST API; actuator (health/metrics) runs on :8091.
@@ -245,9 +251,9 @@ mTLS setup with self-signed certificates: [`doc/GPU Plane mTLS Setup.md`](doc/GP
 | --- | --- | --- |
 | **Deployment contract** | Defined | Defined (v3.1.0) |
 | **Implementation** | One workload per GPU (node1 TEI embedding, node2 vLLM reranker, node3 vLLM synthesis); Gateway routing ConfigMap; mTLS; streaming; **execution-JWT signing + JWKS (T-K8S-6a)**; static model readiness behind Envoy | **Complete:** mTLS + tenant authorization, provider registry, logical→provider rewrite, streaming, **Responses API**, canonical errors, circuit breaker, health, cost ledger, budget, sensitivity, kill switch (config + persisted runtime `GPUControlService`), multi-provider failover, upstream request IDs, zero-prompt logging verified, digest-pinned packaging |
-| **Acceptance** | **Cluster phase 5 passed:** EMBED/SYNTHESIZE/stream/RERANK through Gateway → Envoy (execution JWT) → the three GPUs; unsigned→401; direct backend access denied. Local end-to-end (`deployments/homelab/scripts/envoy-jwt-local-test.sh`) 17/17. **Pending:** load baselines and the full §24 suite | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md): opencode.ai arm 15/15 (current; cheap paid models, estimated spend $0.000063), OpenRouter free arm 20/20 (last run before OpenRouter became unreachable from this network); §46 checklist `tools/gpu7-package-check.py --live` 16/16. Freeze attestation (§49) awaits reviewer sign-off |
+| **Acceptance** | **Historical cluster phase-5 run (2026-09-25):** selected EMBED/SYNTHESIZE/stream/RERANK requests through Gateway → Envoy (execution JWT) → the three GPUs; unsigned→401; direct backend access denied. Local end-to-end (`deployments/homelab/scripts/envoy-jwt-local-test.sh`) 17/17. This is not full GPU-5 §24 acceptance or a current deployment check. **Pending:** load baselines and the full §24 suite | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md): opencode.ai arm 15/15 (current; cheap paid models, estimated spend $0.000063), OpenRouter free arm 20/20 (last run before OpenRouter became unreachable from this network); §46 checklist `tools/gpu7-package-check.py --live` 16/16. Freeze attestation (§49) awaits reviewer sign-off |
 
-**GPU-5 cluster phase 5 run (2026-09-25).** Single requests go through Gateway (gRPC mTLS, principal `synanton-platform`) → Envoy (ES256 execution JWT verified) → the GPU backends. Gateway image `gpu-gateway:0.1.0@sha256:8a747eb…`.
+**GPU-5 cluster phase 5 run (2026-09-25; historical, selected requests).** This records one tested cluster state, not a full rollout or current availability. Single requests went through Gateway (gRPC mTLS, principal `synanton-platform`) → Envoy (ES256 execution JWT verified) → GPU backends. Gateway image `gpu-gateway:0.1.0@sha256:8a747eb…`. Later demo-window deployment state is separate: see the 2026-10-21 integration note below.
 
 | Operation | Backend | Result | Latency |
 |---|---|---|---|
@@ -298,9 +304,13 @@ the safety net.
 - **Target models:** `bge-small-384d` is the demo/platform vector default
   (`:30801`); `bge-base-768d` is the GPU-5 primary (`:30800`). The platform's
   payload freeze is **384** until #23/ADR-013 says otherwise.
-- **Demo window:** the Gateway/Envoy stack is parked at scale-to-zero pending
-  the gpu-runtime **#23** decision (2026-10-31) and T-K8S-6a. The BM25 demo does
-  not depend on it; vector integration acceptance waits on that decision.
+- **Demo window (reviewed 2026-10-21):** the TEI `bge-small-384d` endpoint
+  (`:30801`) is provisioned but scaled to zero; whether it can be raised
+  independently for vector acceptance remains open in [gpu-runtime #23](https://github.com/synanton/gpu-runtime/issues/23)
+  (decision due 2026-10-31). T-K8S-6a is implemented and was exercised in the
+  historical phase-5 run above. The BM25 demo does not depend on the endpoint;
+  vector integration acceptance waits on #23 and is not established by the
+  September cluster run.
 
 GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introducing production-scale scheduling complexity.
 
@@ -469,7 +479,7 @@ Apache 2.0 License – see [LICENSE](LICENSE).
 
 ## References
 
-- [Synanton Design v1.21 (current)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.21.md)
-- [Synanton Design v1.20 (GPU Part VIII)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.20.md)
-- [Synanton Design v1.19 (baseline)](https://github.com/Synanton/platform/blob/main/docs/architecture/synanton-design-1.19.md)
-- [Synanton Core README](https://github.com/Synanton/platform/blob/main/README.md)
+- [Platform Architecture 1.0 capstone](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-platform-architecture-1.0.md) — current platform-wide architecture and implementation status.
+- [Design 1.30 — AI and Model Runtime Plane](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.30.md) — current approved platform-owned runtime contract; approval is not implementation acceptance.
+- [Design 1.20 — GPU Execution Plane (historical)](https://github.com/synanton/platform/blob/main/docs/architecture/archive/synanton-design-1.20.md) — prior isolation architecture, retained as history and folded into later platform design.
+- [Platform README](https://github.com/synanton/platform/blob/main/README.md) and [this repository's documentation index](doc/README.md).
