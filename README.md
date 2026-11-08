@@ -90,6 +90,11 @@ Execution states include accepted/queued, model loading, running, and terminal s
 
 These profiles are not a single automatic fallback chain. GPU-7 does not silently fall back to local inference, and CPU fallback remains a platform responsibility.
 
+## RAKG extraction workload
+
+The homelab blueprints also include a dedicated [Qwen3-4B extraction workload](deployments/homelab/blueprints/vllm/extraction-llm.yaml) used by Synflux's `LlmExtractionAdapter` for the RAKG Phase B path. It uses the locally mirrored Qwen3-4B-Instruct-2507 artifact, a pinned vLLM image, an 8k context, and an explicitly allocated GPU. The recorded live adapter run against the frozen extraction gold reports **entity F1 0.618** and **relationship F1 0.078** (ADR-022). Treat these as a measured feasibility baseline—not a claim of production readiness or complete graph-extraction quality.
+
+
 ## Key capabilities
 
 - **Versioned gRPC contract:** `synanton.gpu.v1`, mirrored from the platform repository and checked by `./gradlew check`.
@@ -111,7 +116,7 @@ These profiles are not a single automatic fallback chain. GPU-7 does not silentl
 | Build | Gradle (Kotlin DSL) |
 | Service contract | gRPC, Protocol Buffers, Protovalidate |
 | Persistence | PostgreSQL, Flyway, JDBC |
-| Local inference | vLLM, Hugging Face Text Embeddings Inference (TEI) |
+| Local inference | vLLM (including **Qwen3-4B-Instruct-2507** for RAKG extraction), Hugging Face Text Embeddings Inference (TEI) |
 | External inference | OpenAI-compatible HTTPS provider APIs |
 | Observability | Micrometer, Prometheus, OpenTelemetry |
 | Tests | JUnit 5, AssertJ, Mockito, Testcontainers |
@@ -127,7 +132,7 @@ PostgreSQL is the authoritative store for execution state. Redis, Kafka, and Cas
 │   ├── gpu-contract/              # synanton.gpu.v1 protobuf contract mirror
 │   └── gpu-gateway/               # Spring Boot Gateway and runtime adapters
 ├── deployments/
-│   ├── homelab/                   # GPU-5 Kubernetes blueprints, Helm, scripts and docs
+│   ├── homelab/                   # GPU-5 blueprints (TEI, vLLM synthesis, vLLM extraction), Helm, scripts and docs
 │   └── external/                  # GPU-7 Compose profile, config, mock and smoke tests
 ├── doc/                           # Canonical deployment, security and setup specifications
 ├── tools/
@@ -154,6 +159,10 @@ PostgreSQL is the authoritative store for execution state. Redis, Kafka, and Cas
 git clone https://github.com/synanton/gpu-runtime.git
 cd gpu-runtime
 
+# Full Gradle build (all applicable modules and verification tasks)
+./gradlew build
+
+# Or run focused tasks during development:
 # Compile production sources
 ./gradlew compileJava
 
@@ -197,6 +206,8 @@ Provider credentials belong in environment/secret configuration, never in commit
 
 ## Current implementation and acceptance status
 
+**Last reviewed: 2026-11-08**
+
 The table below summarizes the latest evidence recorded in the repository's implementation plans. These are dated test results, not claims that a cluster or provider is reachable today.
 
 | Milestone | Scope | Latest recorded state |
@@ -215,7 +226,7 @@ For detailed evidence and updates, use:
 - [GPU-7 implementation plan](deployments/external/gpu-7-implementation-plan.md)
 - [Documentation index and status vocabulary](doc/README.md)
 
-## RAKG extraction workload\n\nThe homelab blueprints also include a dedicated [Qwen3-4B extraction workload](deployments/homelab/blueprints/vllm/extraction-llm.yaml) used by Synflux's `LlmExtractionAdapter` for the RAKG Phase B path. It uses the locally mirrored Qwen3-4B-Instruct-2507 artifact, a pinned vLLM image, an 8k context, and an explicitly allocated GPU. The recorded live adapter run against the frozen extraction gold reports **entity F1 0.618** and **relationship F1 0.078** (ADR-022). Treat these as a measured feasibility baseline—not a claim of production readiness or complete graph-extraction quality.\n\n## Core invariants
+## Core invariants
 
 1. **PostgreSQL is authoritative** for execution state; no in-memory shadow or secondary state store.
 2. **Fail closed:** a request is not dispatched if durable admission/recording fails.
