@@ -203,7 +203,7 @@ The table below summarizes the latest evidence recorded in the repository's impl
 |---|---|---|
 | GPU-1 to GPU-3 | Contract, domain core, persistence, runtime and model lifecycle | Implementation milestones marked complete |
 | GPU-4 | Platform integration and contract mirror | Contract mirror exists; platform runtime integration is tracked separately |
-| GPU-5 | Local GPU inference | Selected cluster request paths (EMBED, SYNTHESIZE, streaming, RERANK) and negative perimeter checks passed in the 2026-09-25 run; local Envoy/JWT end-to-end test recorded 17/17. Full acceptance suite and load baselines remain outstanding in the checked-in plan |
+| GPU-5 | Local GPU inference | Selected cluster request paths (EMBED, SYNTHESIZE, streaming, RERANK) and negative perimeter checks passed in the 2026-09-25 run; local Envoy/JWT end-to-end test recorded 17/17. A separate Qwen3-4B extraction workload blueprint was added on 2026-11-08 for the RAKG Phase B path; its recorded live adapter evaluation reports entity F1 0.618 and relationship F1 0.078 (ADR-022), which is feasibility evidence, not full acceptance. Full GPU-5 acceptance and load baselines remain outstanding in the checked-in plan |
 | GPU-7 | External provider profile | Plan records 31/31 external acceptance tests, packaging/smoke checks, and a 16/16 packaging checklist. Live provider evidence is dated; OpenRouter connectivity was unavailable in the recorded environment. Freeze attestation/reviewer sign-off remains outstanding |
 | GPU-6 | Production hardening | Deferred; not a prerequisite for GPU-5 or GPU-7 |
 
@@ -215,7 +215,7 @@ For detailed evidence and updates, use:
 - [GPU-7 implementation plan](deployments/external/gpu-7-implementation-plan.md)
 - [Documentation index and status vocabulary](doc/README.md)
 
-## Core invariants
+## RAKG extraction workload\n\nThe homelab blueprints also include a dedicated [Qwen3-4B extraction workload](deployments/homelab/blueprints/vllm/extraction-llm.yaml) used by Synflux's `LlmExtractionAdapter` for the RAKG Phase B path. It uses the locally mirrored Qwen3-4B-Instruct-2507 artifact, a pinned vLLM image, an 8k context, and an explicitly allocated GPU. The recorded live adapter run against the frozen extraction gold reports **entity F1 0.618** and **relationship F1 0.078** (ADR-022). Treat these as a measured feasibility baseline—not a claim of production readiness or complete graph-extraction quality.\n\n## Core invariants
 
 1. **PostgreSQL is authoritative** for execution state; no in-memory shadow or secondary state store.
 2. **Fail closed:** a request is not dispatched if durable admission/recording fails.
