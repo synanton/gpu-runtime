@@ -1,0 +1,106 @@
+# vLLM extraction workload — node3, Qwen3-4B-Instruct-2507.
+# RAKG Phase B inference backend. Same hostPath model + pinned image as the
+# synthesis workload, but an 8k context and a lighter sequence budget for
+# prompt tuning. node3 has 2 GPUs; TEI/synthesis are scaled to 0.
+apiVersion: apps/v1
+kind: Deployment
+metadata:
+  name: vllm-extraction
+  namespace: gpu-plane
+  labels:
+    app: vllm-extraction
+spec:
+  replicas: 1
+  strategy:
+    type: Recreate
+  selector:
+    matchLabels:
+      app: vllm-extraction
+  template:
+    metadata:
+      labels:
+        app: vllm-extraction
+    spec:
+      runtimeClassName: nvidia
+      nodeName: node3
+      imagePullSecrets:
+        - name: local-registry-cred
+      containers:
+        - name: vllm
+          image: local-registry:5000/vllm-openai:v0.29.0
+          imagePullPolicy: IfNotPresent
+          args:
+            - /models
+            - --served-model-name
+            - qwen3-extraction
+            - --host
+            - "0.0.0.0"
+            - --port
+            - "8000"
+            - --gpu-memory-utilization
+            - "0.85"
+            - --max-model-len
+            - "8192"
+            - --max-num-seqs
+            - "4"
+          env:
+            - name: HF_HUB_OFFLINE
+              value: "1"
+            - name: TRANSFORMERS_OFFLINE
+              value: "1"
+          ports:
+            - containerPort: 8000
+          resources:
+            requests:
+              nvidia.com/gpu: 1
+              cpu: "4"
+              memory: 16Gi
+            limits:
+              nvidia.com/gpu: 1
+              cpu: "8"
+              memory: 32Gi
+          volumeMounts:
+            - name: model
+              mountPath: /models
+              readOnly: true
+            - name: vllm-cache
+              mountPath: /root/.cache/vllm
+          startupProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 10
+            failureThreshold: 90
+          readinessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 15
+            failureThreshold: 3
+          livenessProbe:
+            httpGet:
+              path: /health
+              port: 8000
+            periodSeconds: 30
+            failureThreshold: 3
+      volumes:
+        - name: vllm-cache
+          emptyDir: {}
+        - name: model
+          hostPath:
+            path: /mnt/local-fast/models/qwen3-4b-instruct-2507
+            type: Directory
+---
+apiVersion: v1
+kind: Service
+metadata:
+  name: vllm-extraction
+  namespace: gpu-plane
+spec:
+  selector:
+    app: vllm-extraction
+  ports:
+    - protocol: TCP
+      port: 8000
+      targetPort: 8000
+  type: ClusterIP
