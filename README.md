@@ -30,42 +30,33 @@ The platform talks only to the GPU Runtime through the versioned `synanton.gpu.v
 
 ## Architecture
 
-```text
-                       Synanton Platform
-                 business intent · tenant · model
-                              |
-                       gRPC + mTLS
-                    synanton.gpu.v1
-                              |
-                              v
-                    +-------------------+
-                    |    GPU Gateway    |
-                    | auth · API · state|
-                    +---------+---------+
-                              |
-                    +---------v---------+
-                    | Admission &       |
-                    | execution control |
-                    +---------+---------+
-                              |
-                    +---------v---------+
-                    | ProviderRouter /  |
-                    | Runtime adapters  |
-                    +----+----------+---+
-                         |          |
-             GPU-5 local |          | GPU-7 external
-                         |          |
-                  +------v---+  +---v----------------+
-                  | Envoy    |  | OpenAI-compatible |
-                  | JWT gate |  | provider endpoint |
-                  +-----+----+  +-------------------+
-                        |
-                  +-----v------+
-                  | TEI / vLLM |
-                  +------------+
+```mermaid
+flowchart TB
+    platform["Synanton Platform<br/>Business intent · tenant · logical model"]
+    gateway["GPU Gateway<br/>Authentication · gRPC API · execution state"]
+    admission["Admission & execution control"]
+    router["ProviderRouter / runtime adapters"]
 
-             PostgreSQL: authoritative execution state
-             Model artifact cache: local GPU profile
+    platform -->|"synanton.gpu.v1 · gRPC + mTLS"| gateway
+    gateway --> admission --> router
+
+    subgraph local["GPU-5 · Local inference"]
+        envoy["Envoy · signed execution JWT"]
+        backend["TEI / vLLM"]
+        envoy --> backend
+    end
+
+    subgraph external["GPU-7 · External provider"]
+        provider["OpenAI-compatible HTTPS provider"]
+    end
+
+    router -->|"Local execution"| envoy
+    router -->|"External execution"| provider
+
+    postgres[("PostgreSQL<br/>Authoritative execution state")]
+    cache[("Model artifact cache<br/>GPU-5 only")]
+    gateway <--> postgres
+    backend -. "Verified model artifacts" .-> cache
 ```
 
 ### Request lifecycle
@@ -126,23 +117,28 @@ PostgreSQL is the authoritative store for execution state. Redis, Kafka, and Cas
 
 ## Repository map
 
-```text
-.
-├── java/
-│   ├── gpu-contract/              # synanton.gpu.v1 protobuf contract mirror
-│   └── gpu-gateway/               # Spring Boot Gateway and runtime adapters
-├── deployments/
-│   ├── homelab/                   # GPU-5 blueprints (TEI, vLLM synthesis, vLLM extraction), Helm, scripts and docs
-│   └── external/                  # GPU-7 Compose profile, config, mock and smoke tests
-├── doc/                           # Canonical deployment, security and setup specifications
-├── tools/
-│   ├── gpu-grpc-call.sh           # mTLS-aware grpcurl helper
-│   ├── gpu7-check/                 # live external-provider validation
-│   ├── gpu7-package-check.py       # GPU-7 packaging checklist
-│   └── pin-image-digests.sh
-├── scripts/
-│   └── verify-gpu-contract-mirror.sh
-└── .github/workflows/              # Gradle CI and contract mirror checks
+```mermaid
+flowchart TB
+    root["gpu-runtime/"]
+    root --> java["java/"]
+    java --> contract["gpu-contract/<br/>synanton.gpu.v1 contract mirror"]
+    java --> gateway["gpu-gateway/<br/>Spring Boot Gateway and runtime adapters"]
+
+    root --> deployments["deployments/"]
+    deployments --> homelab["homelab/<br/>GPU-5 blueprints: TEI, vLLM synthesis,<br/>vLLM extraction, Helm, scripts and docs"]
+    deployments --> external["external/<br/>GPU-7 Compose profile, config,<br/>mock and smoke tests"]
+
+    root --> docs["doc/<br/>Deployment, security and setup specifications"]
+    root --> tools["tools/"]
+    tools --> grpc["gpu-grpc-call.sh · mTLS grpcurl helper"]
+    tools --> check["gpu7-check/ · external-provider validation"]
+    tools --> package["gpu7-package-check.py · packaging checklist"]
+    tools --> pin["pin-image-digests.sh"]
+
+    root --> scripts["scripts/"]
+    scripts --> mirror["verify-gpu-contract-mirror.sh"]
+
+    root --> ci[".github/workflows/<br/>Gradle CI and contract mirror checks"]
 ```
 
 ## Build and test
