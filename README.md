@@ -1,485 +1,250 @@
 # Synanton GPU Runtime
 
-> **Documentation status (2026-10-21):** GPU-5's request-path demonstration is
-> validated, but its load baselines and complete acceptance suite remain open.
-> GPU-7's local acceptance/package checks are passing; freeze attestation still
-> awaits review. Neither status means production readiness. See [status below](#roadmap)
-> and the [documentation index](doc/README.md).
-
-[![Status](https://img.shields.io/badge/Status-Development-blue)](https://github.com/Synanton/gpu-runtime)
-[![Java](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
+[![Development](https://img.shields.io/badge/status-development-blue)](https://github.com/synanton/gpu-runtime)
+[![Java 21](https://img.shields.io/badge/Java-21-red)](https://adoptium.net/)
 [![Spring Boot](https://img.shields.io/badge/Spring%20Boot-3.x-green)](https://spring.io/projects/spring-boot)
-[![gRPC](https://img.shields.io/badge/gRPC-Protobuf-purple)](https://grpc.io/)
+[![gRPC](https://img.shields.io/badge/API-gRPC%20%2F%20Protobuf-purple)](https://grpc.io/)
+[![License: Apache 2.0](https://img.shields.io/badge/License-Apache%202.0-blue.svg)](LICENSE)
 
-## Overview
+**Synanton GPU Runtime** is the isolated model-execution plane for [Synanton Platform](https://github.com/synanton/platform). It provides a stable, authenticated gRPC boundary for inference workloads while keeping provider credentials, runtime lifecycle, execution state, and infrastructure details outside the platform.
 
-The **GPU Runtime** is a physically isolated, on-premise optimized service responsible for executing GPU-intensive inference workloads (LLMs, Embeddings, Reranking) on behalf of the **Synanton Platform**.
+The repository supports two deliberately separate deployment profiles:
 
-It acts as the exclusive bridge between the business logic of Synanton and the physical GPU infrastructure, ensuring a strict separation of concerns.
+- **GPU-5 — local inference:** serve models on an isolated Kubernetes GPU cluster using TEI and vLLM.
+- **GPU-7 — external providers:** route to OpenAI-compatible inference providers from a container deployment, without requiring local GPUs or Kubernetes.
 
-### Architectural Invariant
-- **Synanton Platform** determines **WHAT** should execute (business intent, model selection, tenant identity).
-- **GPU Runtime** determines **HOW** it executes (scheduling, admission, runtime lifecycle).
-- **Kubernetes** determines **WHERE** it executes (node placement, GPU device allocation).
+> **Project status:** this is an active development and validation repository, not a production-readiness claim. The latest checked-in acceptance evidence is date-scoped below; consult the linked plans before treating a test result as current operational availability.
 
-> **Critical Constraint**: The Main Platform is strictly prohibited from directly discovering or accessing Kubernetes Pods, GPU nodes, physical GPUs, or vLLM endpoints. The GPU Gateway is the **sole network entry point**.
+## Responsibilities and boundaries
 
----
+The system follows a simple division of responsibility:
 
-## Key Features
+| Component | Owns |
+|---|---|
+| **Synanton Platform** | Business intent, tenant identity, logical model selection, workflow orchestration, and CPU fallback |
+| **GPU Runtime** | Authentication at the runtime boundary, admission, idempotency records, execution lifecycle, provider routing, and usage reporting |
+| **Execution backend** | Model inference and provider-specific execution |
+| **Infrastructure** | Placement, GPU device allocation, networking, storage, and deployment lifecycle |
 
-- **Physical Isolation**: Runs in a dedicated Kubernetes cluster, completely separated from the Main Synanton control plane.
-- **Idempotent Execution**: Uses `request_id` + deterministic request hashing to guarantee at-most-once execution semantics, backed by a fail-closed PostgreSQL store.
-- **Intelligent Admission Control**: Validates tenant assertions, model capabilities, token context limits, and dynamic concurrency quotas *before* scheduling.
-- **vLLM Integration**: Abstracts vLLM (and future runtimes like TGI) behind a clean `ExecutionRuntime` interface with robust retry safety (`RetryDisposition`).
-- **Logical Capacity API**: Exposes only logical model concurrency (`available_concurrency`) to the Main Platform, never physical GPU topology.
-- **Shared Model Artifact Cache**: Downloads models once from the internal registry, verifies integrity via SHA-256 digests, and shares them read-only across all vLLM replicas.
-- **Cost Attribution**: Reports `input_tokens`, `output_tokens`, and duration back to the Main Platform (`UsageReport` on `synanton.gpu.v1`) for tenant chargeback, without exposing infrastructure details.
-- **Lazy Reconciliation**: Handles runtime failures deterministically via `GetStatus()` calls—no complex background controllers required in v1.20.
-
----
+The platform talks only to the GPU Runtime through the versioned `synanton.gpu.v1` gRPC contract over mTLS. It must not discover or call Kubernetes Pods, GPU nodes, vLLM/TEI endpoints, or external provider APIs directly. The Gateway is the runtime's network entry point.
 
 ## Architecture
 
-### High-Level Component Flow
-
 ```text
-┌─────────────────────────────────────────────────────────────────┐
-│                     MAIN Synanton PLATFORM                      │
-│  (Business Intent, Model Selection, Tenant Auth, CPU Fallback)  │
-└───────────────────────────────┬─────────────────────────────────┘
-                                │ gRPC / mTLS
-                                │ Signed Execution Assertion
-                                ▼
-┌─────────────────────────────────────────────────────────────────┐
-│                      GPU Runtime                        │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                    GPU Gateway                            │  │
-│  │  (AuthN/AuthZ, Idempotency, Execution State)              │  │
-│  └───────────────────────────┬───────────────────────────────┘  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                Admission Controller                       │  │
-│  │  (Quotas, Concurrency, Token Limits, Model Capabilities)  │  │
-│  └───────────────────────────┬───────────────────────────────┘  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │               Execution Scheduler                         │  │
-│  │  DirectScheduler (Default)  │  EqualixScheduler (Future)  │  │
-│  └───────────────────────────┬───────────────────────────────┘  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                   Model Manager                           │  │
-│  │  (Lifecycle, Capabilities, Artifact Resolution)           │  │
-│  └───────────────────────────┬───────────────────────────────┘  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │   ProviderRouter → VllmRuntime (GPU-5) |                  │  │
-│  │                    OpenAiProviderRuntime (GPU-7)          │  │
-│  └───────────────────────────┬───────────────────────────────┘  │
-│                              ▼                                  │
-│  ┌───────────────────────────────────────────────────────────┐  │
-│  │                       vLLM                                │  │
-│  │  (StatefulSets/Deployments on GPU Nodes)                  │  │
-│  └───────────────────────────────────────────────────────────┘  │
-│                                                                 │
-│  PostgreSQL (HA)        Shared Model Cache (ROX)                │
-└─────────────────────────────────────────────────────────────────┘
+                       Synanton Platform
+                 business intent · tenant · model
+                              |
+                       gRPC + mTLS
+                    synanton.gpu.v1
+                              |
+                              v
+                    +-------------------+
+                    |    GPU Gateway    |
+                    | auth · API · state|
+                    +---------+---------+
+                              |
+                    +---------v---------+
+                    | Admission &       |
+                    | execution control |
+                    +---------+---------+
+                              |
+                    +---------v---------+
+                    | ProviderRouter /  |
+                    | Runtime adapters  |
+                    +----+----------+---+
+                         |          |
+             GPU-5 local |          | GPU-7 external
+                         |          |
+                  +------v---+  +---v----------------+
+                  | Envoy    |  | OpenAI-compatible |
+                  | JWT gate |  | provider endpoint |
+                  +-----+----+  +-------------------+
+                        |
+                  +-----v------+
+                  | TEI / vLLM |
+                  +------------+
+
+             PostgreSQL: authoritative execution state
+             Model artifact cache: local GPU profile
 ```
 
-### State Machine (Simplified)
+### Request lifecycle
 
+1. The platform submits a request using the gRPC contract and an authenticated mTLS identity.
+2. The Gateway authenticates and authorizes the caller, validates the requested logical model and request limits, and records execution state in PostgreSQL.
+3. Admission control applies model capabilities and configured concurrency limits before dispatch.
+4. The selected runtime adapter executes against the local inference perimeter or a configured external provider.
+5. The Gateway records the terminal state and usage information and exposes status through the contract.
 
+Execution states include accepted/queued, model loading, running, and terminal success, failure, or cancellation. Terminal states are irreversible. Status reads can trigger lazy reconciliation of expired running leases; the design does not depend on a separate always-on controller.
 
-```text
-ACCEPTED → (Model Hot) → RUNNING → SUCCEEDED / FAILED / CANCELLED
-ACCEPTED → QUEUED → MODEL_LOADING → RUNNING → SUCCEEDED / FAILED / CANCELLED
+### Deployment profiles
 
-                        ACCEPTED
-                           │
-                      ┌────┴────┐
-                      │         │
-                 model READY  model loading
-                      │         │
-                      │       QUEUED ──────────────────────────┐
-                      │         │                              │
-                      │   MODEL_LOADING ─── load failure       │
-                      │         │                              │
-                      └────►  QUEUED (ready to dispatch)       │
-                               │                               │
-                            RUNNING ◄──────────────────────────┘
-                               │
-                  ┌────────────┼────────────┐
-                  ▼            ▼            ▼
-             SUCCEEDED      FAILED      CANCELLED
-```
-
-
-
-All non-terminal states can transition to `FAILED` or `CANCELLED`. Terminal states are irreversible.
-
----
-
-## Technology Stack
-
-| Layer                | Technology                                              |
-| -------------------- | ------------------------------------------------------- |
-| **Language**         | Java 21                                                 |
-| **Framework**        | Spring Boot 3.x                                         |
-| **Build**            | Gradle (Kotlin DSL)                                     |
-| **RPC / API**        | gRPC + Protobuf + Protovalidate (PGV)                   |
-| **Persistence**      | PostgreSQL + Flyway (plain JDBC / `JdbcTemplate`)       |
-| **Observability**    | Micrometer + Prometheus, OpenTelemetry                  |
-| **Testing**          | JUnit 5, AssertJ, Mockito, Testcontainers               |
-| **Orchestration**    | Kubernetes + Helm                                       |
-| **GPU Runtime**      | vLLM (initial), TGI (future)                            |
-| **Artifact Storage** | Internal Registry + Shared Read-Only Cache (NFS/CephFS) |
-
-> **Important**: The GPU Execution Plane deliberately **does not** use Redis, Kafka, or Cassandra. PostgreSQL is the sole authoritative source of execution state.
-
-------
-
-## Repository Structure
-
-
-```text
-gpu-runtime/                               # generated from `git ls-files` (2026-09-25)
-├── build.gradle.kts · settings.gradle.kts · gradle.properties · gradle/libs.versions.toml
-├── .cursor/rules/                         # java-rules.mdc, gpu-execution-rules.mdc
-├── .github/workflows/                     # gradle.yml, gpu-contract-mirror.yml
-│
-├── doc/
-│   ├── GPU-5  GPU-6  GPU-7 Deployment Plan.md   # canonical spec v3.0.0 (gRPC platform transport)
-│   ├── GPU-5 Local Models Setup.md              # node-local model download/verify (uv venv)
-│   ├── GPU Plane mTLS Setup.md                  # self-signed PKI, principals, rotation
-│   ├── TEST_ENVIRONMENT_SETUP.md
-│   └── GPU Execution Plane Implementation Plan v1.20.md / v1.21.md
-│
-├── deployments/
-│   ├── homelab/                           # [GPU-5] local inference, one workload per GPU
-│   │   ├── gpu-5-implementation-plan.md   #   phased plan, decisions D1–D7, acceptance
-│   │   ├── claster-as-build.md            #   observed 4-node cluster inventory
-│   │   ├── blueprints/                    #   plain manifests (phased kubectl bring-up)
-│   │   │   ├── namespace.yaml
-│   │   │   ├── tei/embedding.yaml         #     node1 GTX 1650 — TEI, BGE-base
-│   │   │   ├── vllm/reranker.yaml         #     node2 RTX 4060 Ti — Qwen3-Reranker-0.6B
-│   │   │   ├── vllm/synthesis.yaml        #     node3 RTX 5060 Ti — Qwen3-4B
-│   │   │   ├── gateway/gateway.yaml       #     gRPC :9090, actuator :8091, routing ConfigMap
-│   │   │   ├── envoy/                     #     execution perimeter (jwt_authn)
-│   │   │   ├── postgres/postgres.yaml
-│   │   │   └── network-policy/network-policies.yaml
-│   │   ├── helm/gpu-plane/                #   chart mirroring the blueprints
-│   │   ├── docker/gateway.Dockerfile      #   gateway image (T-K8S-1)
-│   │   ├── docs/                          #   architecture, benchmarks, observability, troubleshooting
-│   │   └── scripts/                       #   mirror-images, build-and-push, create-registry-secret,
-│   │                                      #   deploy, smoke-test, record-vram, cluster-stop/start
-│   └── external/                          # [GPU-7] external providers (no GPU/Envoy/vLLM)
-│       ├── gpu-7-implementation-plan.md
-│       ├── compose.yaml                   #   gateway + PostgreSQL + mock provider
-│       ├── .env.example                   #   secrets template (.env is git-ignored)
-│       ├── config/gateway-external.yaml   #   providers, catalog, kill switch, budget, sensitivity
-│       ├── mock-provider/                 #   stdlib-only OpenAI-compatible mock (T-K8S-51)
-│       └── scripts/                       #   gen-certs.sh (self-signed mTLS PKI), smoke-test.sh
-│
-├── java/
-│   ├── gpu-contract/                      # synanton.gpu.v1 — byte-identical mirror of platform
-│   │   └── src/main/proto/synanton/gpu/v1/gpu_execution_service.proto
-│   └── gpu-gateway/                       # Spring Boot service (gRPC API; actuator only on HTTP)
-│       └── src/main/
-│           ├── java/org/synanton/gpu/
-│           │   ├── adapter/in/grpc/       #   GpuExecutionGrpcAdapter, GpuControlGrpcAdapter,
-│           │   │                          #   CallerPrincipalInterceptor, CallerAuthorization (mTLS)
-│           │   ├── adapter/out/runtime/   #   VllmRuntime, OpenAiProviderRuntime, SseRelay,
-│           │   │                          #   ProviderRuntimeRegistry, CircuitBreaker, ProviderHealthMonitor
-│           │   ├── adapter/out/database/  #   JdbcExecutionRepository, JdbcCostLedger
-│           │   ├── adapter/out/{registry,model,schedule}/
-│           │   ├── domain/service/        #   ExecuteService, ProviderRouter, ExternalRoutingPolicy, …
-│           │   ├── domain/{model,port}/
-│           │   └── config/                #   GpuGatewayProperties, GatewayStartupValidator, gRPC lifecycle
-│           └── resources/
-│               ├── application.yml
-│               └── db/migration/          #   V1 executions, V2 cost_ledger, V3 upstream_request_id,
-│                                          #   V4 routing_control, V5 responses
-│
-├── scripts/verify-gpu-contract-mirror.sh  # proto mirror check vs platform (in ./gradlew check)
-├── tools/
-│   ├── gpu-grpc-call.sh                   # grpcurl wrapper (mTLS) for both gRPC services
-│   ├── gpu7-check/                        # live GPU-7 validation: opencode.ai (paid, cheap) or OpenRouter (free) arm (uv venv)
-│   ├── gpu7-package-check.py              # §46 packaging checklist (T-K8S-53)
-│   └── pin-image-digests.sh               # §8 digest pinning
-└── README.md · LICENSE
-```
-
-------
-
-## Roadmap
-
-| Milestone | Purpose | Status |
+| | GPU-5: local inference | GPU-7: external provider |
 |---|---|---|
-| GPU-1 | Contract & deterministic semantics | Complete |
-| GPU-2 | Domain core & persistence | Complete |
-| GPU-3 | Runtime & model lifecycle | Complete |
-| GPU-4 | Main Platform integration / contract mirror | Contract complete; runtime routing being validated |
-| **GPU-5** | **Homelab local inference (Qwen3-4B synthesis + BGE-base embedding via TEI + Qwen3-Reranker 0.6B — one workload per GPU)** | **Selected cluster phase-5 requests validated 2026-09-25, including execution-JWT; this does not validate a complete/current homelab rollout. Load baselines and the full §24 suite remain pending** |
-| **GPU-7** | **External-provider profile (OpenAI-compatible provider adapter, no local GPU)** | **Contract v3.1.0; acceptance/package checks pass; live-provider evidence is dated in the status section; freeze attestation pending reviewer sign-off** |
+| Compute | NVIDIA GPUs in Kubernetes | External provider; no local GPU required |
+| Runtime | TEI for embeddings; vLLM for reranking and synthesis | OpenAI-compatible provider adapter |
+| Perimeter | Gateway → signed execution JWT → Envoy → backend | Gateway → HTTPS provider API |
+| Deployment | Kubernetes manifests and Helm chart | Docker Compose reference deployment |
+| Main concerns | GPU placement, model artifacts, backend isolation, load/latency baselines | Provider credentials, model mapping, budget, sensitivity, failover, cost |
 
-### Historical status snapshot 2026-10-11 (bench-serving state; not a milestone change)
+These profiles are not a single automatic fallback chain. GPU-7 does not silently fall back to local inference, and CPU fallback remains a platform responsibility.
 
-- **Drivers converged cluster-wide: 615.71.09** (node1 GTX 1650 / node2 RTX
-  4060 Ti / node3 RTX 5060 Ti; CUDA 13.4). Fixes the Sep/Oct skew (module
-  595.84 vs libs 595.99) that broke NVML cluster-wide. Mirror pin:
-  `local-registry:5000/gpu-operator/driver:615.71.09-ubuntu24.04`.
-- **Device plugin v0.21.0** (local rebuild from current upstream main;
-  v0.20.0 kept as rollback) + **time-slicing live** (replicas: 2, allocatable
-  2/worker). Both TEI deployments serve concurrently on node1.
-- **Serving for bench (verified):** TEI bge-base-768d + bge-small-384d
-  (node1, K8s NodePorts :30800/:30801); vLLM Qwen3-Reranker-0.6B (node2,
-  bench NodePort :30802, QWEN3 template required — scores invert without it).
-  Gateway/Envoy/Postgres/vLLM-synthesis parked at 0 (unchanged scope).
-- **GPU-7:** external compose stack up (mock provider); live arms
-  (opencode.ai/OpenRouter) not re-verified since 2026-09-25 — OpenRouter arm
-  remains unreachable from this network.
-| **GPU-6** | **Production deployment and operational hardening** | **Deferred — not a GPU-5/GPU-7 gate** |
+## Key capabilities
 
-### Evidence record — contract, implementation, acceptance (2026-09-25; reviewed 2026-10-21)
+- **Versioned gRPC contract:** `synanton.gpu.v1`, mirrored from the platform repository and checked by `./gradlew check`.
+- **Tenant-aware access control:** mTLS caller identity and authorization; GPU-5 additionally uses signed execution assertions at the Envoy boundary.
+- **Durable execution state:** PostgreSQL is the source of truth for execution records and runtime control state.
+- **Fail-closed request handling:** execution is not dispatched when its durable record cannot be established; idempotency uses request identity and deterministic request hashing.
+- **Admission and capacity:** model capability, token/context constraints, and configured concurrency are checked before dispatch. The platform sees logical capacity, not physical GPU topology.
+- **Runtime abstraction:** local vLLM and external provider implementations sit behind runtime/provider interfaces.
+- **Artifact integrity (GPU-5):** model artifacts are digest-verified, staged, and atomically published into a shared read-only cache.
+- **Provider controls (GPU-7):** logical-to-provider model mapping, streaming, circuit breaking, health, budget and cost accounting, sensitivity controls, kill switch, and multi-provider failover.
+- **Privacy-conscious telemetry:** prompts, tokens, and authorization assertions must not be written to logs or traces.
+- **Usage reporting:** input/output token usage and execution duration are made available for platform-side attribution.
 
-The platform transport is **gRPC `synanton.gpu.v1` over mTLS** on :9090 (Deployment
-Plan v3.1.0 §4, §13). There is no REST API; actuator (health/metrics) runs on :8091.
-mTLS setup with self-signed certificates: [`doc/GPU Plane mTLS Setup.md`](doc/GPU%20Plane%20mTLS%20Setup.md).
+## Technology
 
-| | GPU-5 (`deployments/homelab/`) | GPU-7 (`deployments/external/`) |
-| --- | --- | --- |
-| **Deployment contract** | Defined | Defined (v3.1.0) |
-| **Implementation** | One workload per GPU (node1 TEI embedding, node2 vLLM reranker, node3 vLLM synthesis); Gateway routing ConfigMap; mTLS; streaming; **execution-JWT signing + JWKS (T-K8S-6a)**; static model readiness behind Envoy | **Complete:** mTLS + tenant authorization, provider registry, logical→provider rewrite, streaming, **Responses API**, canonical errors, circuit breaker, health, cost ledger, budget, sensitivity, kill switch (config + persisted runtime `GPUControlService`), multi-provider failover, upstream request IDs, zero-prompt logging verified, digest-pinned packaging |
-| **Acceptance** | **Historical cluster phase-5 run (2026-09-25):** selected EMBED/SYNTHESIZE/stream/RERANK requests through Gateway → Envoy (execution JWT) → the three GPUs; unsigned→401; direct backend access denied. Local end-to-end (`deployments/homelab/scripts/envoy-jwt-local-test.sh`) 17/17. This is not full GPU-5 §24 acceptance or a current deployment check. **Pending:** load baselines and the full §24 suite | **Passing:** `ExternalAcceptanceTest` 31/31; packaged `smoke-test.sh`; live [`tools/gpu7-check`](tools/gpu7-check/README.md): opencode.ai arm 15/15 (current; cheap paid models, estimated spend $0.000063), OpenRouter free arm 20/20 (last run before OpenRouter became unreachable from this network); §46 checklist `tools/gpu7-package-check.py --live` 16/16. Freeze attestation (§49) awaits reviewer sign-off |
+| Area | Technology |
+|---|---|
+| Language / framework | Java 21, Spring Boot 3.x |
+| Build | Gradle (Kotlin DSL) |
+| Service contract | gRPC, Protocol Buffers, Protovalidate |
+| Persistence | PostgreSQL, Flyway, JDBC |
+| Local inference | vLLM, Hugging Face Text Embeddings Inference (TEI) |
+| External inference | OpenAI-compatible HTTPS provider APIs |
+| Observability | Micrometer, Prometheus, OpenTelemetry |
+| Tests | JUnit 5, AssertJ, Mockito, Testcontainers |
+| Deployment | Kubernetes + Helm (GPU-5); Docker Compose (GPU-7) |
 
-**GPU-5 cluster phase 5 run (2026-09-25; historical, selected requests).** This records one tested cluster state, not a full rollout or current availability. Single requests went through Gateway (gRPC mTLS, principal `synanton-platform`) → Envoy (ES256 execution JWT verified) → GPU backends. Gateway image `gpu-gateway:0.1.0@sha256:8a747eb…`. Later demo-window deployment state is separate: see the 2026-10-21 integration note below.
+PostgreSQL is the authoritative store for execution state. Redis, Kafka, and Cassandra are not part of the current execution-state design.
 
-| Operation | Backend | Result | Latency |
-|---|---|---|---|
-| EMBED | TEI `synanton-bge-base-embedding` (node1, GTX 1650) | 2 vectors × 768 dim | 166 ms |
-| SYNTHESIZE | vLLM `synanton-qwen3-4b-synthesis` (node3, RTX 5060 Ti) | "OK", logical model ID returned, usage 12 in / 2 out | 91 ms |
-| ExecuteStream | vLLM `synanton-qwen3-4b-synthesis` (node3) | 12 data chunks + exactly 1 SUCCESS terminal | 282 ms |
-| RERANK | vLLM `synanton-qwen3-reranker-0.6b` (node2, RTX 4060 Ti) | correct order: Paris 0.98 > bananas 0.898 | 74 ms |
-| Negative | Envoy / NetworkPolicy | unsigned request → 401; TEI, vLLM and JWKS unreachable from a non-Envoy pod | — |
+## Repository map
 
-Idle VRAM after model load: node1 471 / 4096 MiB, node2 6229 / 16380 MiB, node3 13689 / 16311 MiB (vLLM preallocates KV cache at `--gpu-memory-utilization 0.90`). Load baselines are pending (`deployments/homelab/gpu-5-implementation-plan.md` §11).
-
-GPU-5 model state: Qwen3 weights verified; `bge-base-en-v1.5` complete on all nodes
-(mirrored); `bge-small-en-v1.5` fallback complete on all nodes. Manual downloads use a `uv` venv +
-`HF_ENDPOINT=https://hf-mirror.com` workaround (Local Models Setup §4).
-
-### Available models on the nodes
-
-`/mnt/local-fast/models` is present on node1, node2 and node3. Node1 has a
-4 GB GTX 1650; node2 and node3 have 16 GB cards (RTX 4060 Ti / RTX 5060 Ti).
-The embedding and reranker models fit all three nodes; the 4B chat model is
-targeted at node2/node3.
-
-| Model | Type | Native dim | Size | Notes |
-|---|---|---|---|---|
-| `bge-small-en-v1.5` | embedding | 384 | 33M | Demo/platform vector default (`synanton-bge-small-embedding`, NodePort `:30801`) |
-| `bge-base-en-v1.5` | embedding | 768 | 110M | GPU-5 primary embedding (`synanton-bge-base-embedding`, NodePort `:30800`) |
-| `qwen3-embedding-0.6b` | embedding | ~1024 | 600M | Stronger option; **requires an ADR-013 re-benchmark before use** |
-| `bge-reranker-0.6b` | reranker | n/a | 600M | Future reranking track |
-| `qwen3-reranker-0.6b` | reranker | n/a | 600M | GPU-5 reranker; QWEN3 prompt template required |
-| `qwen3-4b-instruct` | chat | n/a | 4B | GPU-5 synthesis (node3) |
-
-**Model choice is not a hardware decision.** bge-small remains the demo
-embedding because it is the model measured by ADR-013 at 384d; a GPU makes a
-larger model feasible, but switching to bge-base or qwen3-embedding requires
-re-running the ADR-013 benchmark (recall@k, MRR, latency) and re-indexing.
-Availability is not evidence of quality.
-
-**Dimension warning:** three embedding models with three dimensions are on
-disk. A model swap without a matching dimension/config change is one env var
-away from a misconfiguration; the platform's startup capability assertion is
-the safety net.
-
-### Platform integration status (2026-10-21)
-
-- **Sole compute plane:** the platform consumes EMBED through the
-  `synanton.gpu.v1` client (`GpuPlaneEmbedClient`, platform #356): `GetModels`
-  capability read, pluggable execution-JWT attachment, and client-side batching.
-- **Target models:** `bge-small-384d` is the demo/platform vector default
-  (`:30801`); `bge-base-768d` is the GPU-5 primary (`:30800`). The platform's
-  payload freeze is **384** until #23/ADR-013 says otherwise.
-- **Demo window (reviewed 2026-10-21):** the TEI `bge-small-384d` endpoint
-  (`:30801`) is provisioned but scaled to zero; whether it can be raised
-  independently for vector acceptance remains open in [gpu-runtime #23](https://github.com/synanton/gpu-runtime/issues/23)
-  (decision due 2026-10-31). T-K8S-6a is implemented and was exercised in the
-  historical phase-5 run above. The BM25 demo does not depend on the endpoint;
-  vector integration acceptance waits on #23 and is not established by the
-  September cluster run.
-
-GPU-6 should be driven by evidence from GPU-5 rather than by prematurely introducing production-scale scheduling complexity.
-
-## Related Synanton projects
-
-- [Synanton Platform](https://github.com/synanton/platform)
-- [Content Extractor](https://github.com/synanton/content_extractor)
-
-### GPU-3 Checklist
-
-#### Artifact lifecycle
-- [x] `ArtifactResolver` interface + `SecureRegistryFetcher` implementation
-- [x] SHA-256 artifact digest verification
-- [x] Shared model cache (`/model-cache/<model-id>/<digest>`)
-- [x] Distributed PostgreSQL advisory locking (exactly one downloader per `(model_id, digest)`)
-- [x] Second cache check after acquiring lock
-- [x] Atomic artifact publication (staging → rename)
-
-#### Runtime lifecycle
-- [x] `ExecutionRuntime` port interface with `RuntimeResult` sealed type
-- [x] `VllmRuntime` implementation (HTTP → vLLM `/v1/completions` + `/v1/chat/completions`)
-- [x] `StubExecutionRuntime` for local/CI testing without vLLM
-- [x] `RetryDisposition` domain enum
-- [x] Runtime acceptance semantics explicitly detected (HTTP status, not `IOException`)
-- [x] Automatic retry only for `NOT_ACCEPTED`
-- [x] RUNNING executions receive heartbeat lease refresh
-- [x] `HeartbeatManager` implementation
-- [x] Heartbeat stops on terminal state
-
-#### Persistence
-- [x] `ExecutionRepository` port interface
-- [x] `JdbcExecutionRepository` (advisory lock, predicated UPDATEs, JSONB usage/error)
-- [x] `ConfigModelRepository` (capabilities from `gpu-gateway.models` config)
-
-------
-#### Model manager
-- [x] `ModelManager` port interface
-- [x] `DefaultModelManager` implementation
-- [x] `MODEL_LOADING` execution state explicitly tracked
-- [x] Load failures cascade to QUEUED executions (`failAllQueuedForModel`)
-
-## Contract mirroring
-
-`java/gpu-contract` is a **byte-identical** copy of `platform/java/gpu-contract`:
-
-- protobuf package `synanton.gpu.v1`
-- Java package `org.synanton.gpu.v1`
-- service `GPUExecutionService` (`Execute`, `Cancel`, `GetStatus`, `GetCapacity`, `GetModels`)
-- `GetStatusRequest` / `ExecutionStatus`
-- `ErrorReason` catalogue (`ErrorInfo`)
-
-```bash
-./scripts/verify-gpu-contract-mirror.sh
-GPU_PEER_REPO=/path/to/platform ./scripts/verify-gpu-contract-mirror.sh
+```text
+.
+├── java/
+│   ├── gpu-contract/              # synanton.gpu.v1 protobuf contract mirror
+│   └── gpu-gateway/               # Spring Boot Gateway and runtime adapters
+├── deployments/
+│   ├── homelab/                   # GPU-5 Kubernetes blueprints, Helm, scripts and docs
+│   └── external/                  # GPU-7 Compose profile, config, mock and smoke tests
+├── doc/                           # Canonical deployment, security and setup specifications
+├── tools/
+│   ├── gpu-grpc-call.sh           # mTLS-aware grpcurl helper
+│   ├── gpu7-check/                 # live external-provider validation
+│   ├── gpu7-package-check.py       # GPU-7 packaging checklist
+│   └── pin-image-digests.sh
+├── scripts/
+│   └── verify-gpu-contract-mirror.sh
+└── .github/workflows/              # Gradle CI and contract mirror checks
 ```
 
-Wired into `./gradlew check`. Internal domain states (`ACCEPTED`, `MODEL_LOADING`, `SUCCEEDED`) still exist in PostgreSQL; the gRPC mapper emits the platform wire enum (`QUEUED`, `RUNNING`, `SUCCESS`, …).
+## Build and test
 
----
+### Prerequisites
 
-## Getting Started (Development)
-#### Reconciliation
-- [x] `GetStatusService` lazy reconciliation logic
-- [x] Expired RUNNING leases trigger runtime ping
-- [x] Live runtime refreshes lease; dead runtime → `RUNTIME_UNAVAILABLE`
-- [x] Terminal executions protected by predicated UPDATE
+- JDK 21 (Temurin or another compatible OpenJDK distribution)
+- Docker for Testcontainers-backed integration tests
+- Git
 
-#### Tests
-- [x] 39 unit tests passing (domain, adapters, scheduler, model manager)
-- [ ] Integration tests (JdbcExecutionRepository, GpuExecutionIntegrationTest, ConcurrencyAdmissionTest) — written, require Docker to run
+### Build
 
----
-
-## Core Invariants
-
-These are enforced by the architecture and encoded into `.cursor/rules/gpu-execution-rules.mdc`:
-
-1. **PostgreSQL is the only source of truth** for execution state. No Redis, Cassandra, or in-memory shadow.
-2. **Fail-closed idempotency**: `Execute()` never dispatches an unrecorded request; PostgreSQL failure → `Execute()` failure.
-3. **Transactional admission**: concurrency slots are checked and consumed inside a single PostgreSQL advisory-locked transaction.
-4. **No background controllers**: reconciliation is lazy, triggered by `GetStatus()` lease expiry.
-5. **Retry semantics from protocol, not exceptions**: `RetryDisposition` is derived from HTTP status codes, not `IOException`.
-6. **Exactly one artifact download** per `(model_id, digest)` across all Gateway replicas.
-7. **Artifact integrity before availability**: SHA-256 verified, staged, then atomically published.
-8. **CPU fallback is prohibited here**: belongs entirely to the Synanton Platform.
-9. **No prompt logging**: prompts, tokens, and authorization assertions are never written to logs or traces.
-10. **Equalix is optional**: `ExecutionScheduler` interface allows swapping `DirectScheduler` → `EqualixScheduler` without touching domain or use-case code.
-
----
-
-## Getting Started
-
-- Java 21 (Eclipse Temurin or OpenJDK)
-- Docker (for Testcontainers — used by integration tests)
-- `./gradlew` wrapper (included)
-
-### Build & Test
-
-```bash
-# Compile all modules
-./gradlew compileJava
-```
-
-### Clone the repository
 ```bash
 git clone https://github.com/synanton/gpu-runtime.git
 cd gpu-runtime
-```
 
-### Build the contract module
-```bash
+# Compile production sources
+./gradlew compileJava
+
+# Build the protobuf contract module
 ./gradlew :java:gpu-contract:build
-```
 
-### Run unit tests (no infrastructure required)
-```bash
+# Run the Gateway test task
 ./gradlew :java:gpu-gateway:test
-```
 
-### Run integration tests (Testcontainers PostgreSQL — requires Docker)
-Remove @Disabled from JdbcExecutionRepositoryTest, GpuExecutionIntegrationTest,ConcurrencyAdmissionTest, then run with DOCKER_HOST set to your daemon socket:
-```bash
-DOCKER_HOST=unix:///path/to/docker.sock ./gradlew :java:gpu-gateway:test
-```
-
-### Full build + check (includes GPU proto mirror vs sibling platform/)
-```bash
+# Run the repository verification lifecycle, including contract mirror check
 ./gradlew check
 ```
 
-> Integration tests spin up a real PostgreSQL 16 container. They are `@Disabled` by default to allow clean CI without Docker. Enable them manually when Docker is available.
+The integration tests that require PostgreSQL/Testcontainers need a working Docker daemon. Some infrastructure-dependent tests are disabled by default so the ordinary local/CI test task can run without that environment; follow [Test Environment Setup](doc/TEST_ENVIRONMENT_SETUP.md) and the relevant test instructions before enabling them.
 
-### Configuration
+### Verify the platform contract mirror
 
-Key properties in `application.yml` (all overridable via environment variables):
+`java/gpu-contract` must remain byte-identical to the contract in `synanton/platform`.
 
-| Property | Env var | Default | Purpose |
-|---|---|---|---|
-| `gpu-gateway.grpc-port` | `GPU_GATEWAY_GRPC_PORT` | `9090` | gRPC listen port |
-| `gpu-gateway.dispatch.strategy` | `GPU_GATEWAY_DISPATCH_STRATEGY` | `stub` | `stub`, `direct` (GPU-5 vLLM) or `external` (GPU-7 providers); anything else fails startup |
-| `gpu-gateway.dispatch.vllm-endpoint` | `VLLM_ENDPOINT` | `http://vllm-service:8000` | vLLM base URL |
-| `gpu-gateway.execution.lease-timeout-seconds` | `EXECUTION_LEASE_TIMEOUT_SECONDS` | `300` | Heartbeat lease window |
-| `gpu-gateway.execution.heartbeat-interval-seconds` | `EXECUTION_HEARTBEAT_INTERVAL_SECONDS` | `60` | Heartbeat fire interval |
-| `gpu-gateway.artifacts.cache-dir` | `MODEL_CACHE_DIR` | `/model-cache` | Shared artifact cache root |
-| `gpu-gateway.models.<id>.concurrency-limit` | — | — | Max parallel executions per model |
+```bash
+./scripts/verify-gpu-contract-mirror.sh
 
-Example model configuration:
-
-```yaml
-gpu-gateway:
-  models:
-    llama-3-8b:
-      concurrency-limit: 8
-      max-input-tokens: 32768
-      runtime-class: vllm-a100
-      digest: sha256:abc123...
+# When the platform checkout is not in the expected sibling location:
+GPU_PEER_REPO=/path/to/platform ./scripts/verify-gpu-contract-mirror.sh
 ```
 
----
+## Configuration
+
+The Gateway is configured through Spring application properties, which can be overridden with environment variables. Common settings include:
+
+| Property | Environment variable | Purpose |
+|---|---|---|
+| `gpu-gateway.grpc-port` | `GPU_GATEWAY_GRPC_PORT` | gRPC listener (default `9090`) |
+| `gpu-gateway.dispatch.strategy` | `GPU_GATEWAY_DISPATCH_STRATEGY` | `stub`, `direct` (GPU-5), or `external` (GPU-7) |
+| `gpu-gateway.dispatch.vllm-endpoint` | `VLLM_ENDPOINT` | Local vLLM endpoint |
+| `gpu-gateway.execution.lease-timeout-seconds` | `EXECUTION_LEASE_TIMEOUT_SECONDS` | Execution lease duration |
+| `gpu-gateway.execution.heartbeat-interval-seconds` | `EXECUTION_HEARTBEAT_INTERVAL_SECONDS` | Running execution heartbeat interval |
+| `gpu-gateway.artifacts.cache-dir` | `MODEL_CACHE_DIR` | Local model artifact cache root |
+
+Provider credentials belong in environment/secret configuration, never in committed files. For GPU-7, start from [`.env.example`](deployments/external/.env.example) and follow the [external deployment plan](deployments/external/gpu-7-implementation-plan.md). For GPU-5, follow the [homelab implementation plan](deployments/homelab/gpu-5-implementation-plan.md) and model setup guide.
+
+## Current implementation and acceptance status
+
+The table below summarizes the latest evidence recorded in the repository's implementation plans. These are dated test results, not claims that a cluster or provider is reachable today.
+
+| Milestone | Scope | Latest recorded state |
+|---|---|---|
+| GPU-1 to GPU-3 | Contract, domain core, persistence, runtime and model lifecycle | Implementation milestones marked complete |
+| GPU-4 | Platform integration and contract mirror | Contract mirror exists; platform runtime integration is tracked separately |
+| GPU-5 | Local GPU inference | Selected cluster request paths (EMBED, SYNTHESIZE, streaming, RERANK) and negative perimeter checks passed in the 2026-09-25 run; local Envoy/JWT end-to-end test recorded 17/17. Full acceptance suite and load baselines remain outstanding in the checked-in plan |
+| GPU-7 | External provider profile | Plan records 31/31 external acceptance tests, packaging/smoke checks, and a 16/16 packaging checklist. Live provider evidence is dated; OpenRouter connectivity was unavailable in the recorded environment. Freeze attestation/reviewer sign-off remains outstanding |
+| GPU-6 | Production hardening | Deferred; not a prerequisite for GPU-5 or GPU-7 |
+
+**Do not infer production readiness from a passing component test.** Deployment, security, operational, load, and full acceptance evidence must be assessed for the target environment.
+
+For detailed evidence and updates, use:
+- [GPU Plane deployment specification](doc/GPU-5%20%20GPU-6%20%20GPU-7%20Deployment%20Plan.md)
+- [GPU-5 implementation plan](deployments/homelab/gpu-5-implementation-plan.md)
+- [GPU-7 implementation plan](deployments/external/gpu-7-implementation-plan.md)
+- [Documentation index and status vocabulary](doc/README.md)
+
+## Core invariants
+
+1. **PostgreSQL is authoritative** for execution state; no in-memory shadow or secondary state store.
+2. **Fail closed:** a request is not dispatched if durable admission/recording fails.
+3. **Admission is transactional:** concurrency capacity is claimed under database coordination.
+4. **Retry safety is protocol-driven:** retry decisions use explicit runtime acceptance semantics, not exception type alone.
+5. **Artifact integrity precedes availability:** model artifacts are verified before publication.
+6. **No prompt or secret logging:** prompts, tokens, credentials, and authorization assertions are excluded from logs and traces.
+7. **Infrastructure is abstracted:** platform callers use logical model IDs and capacity, never backend addresses or GPU topology.
+8. **Fallback ownership is explicit:** CPU fallback belongs to the platform; GPU-7 provider failover does not silently route to local GPUs.
+
+## Documentation
+
+| Topic | Document |
+|---|---|
+| Start here / document status | [Documentation index](doc/README.md) |
+| Contract, topology, security and acceptance | [GPU Plane deployment specification](doc/GPU-5%20%20GPU-6%20%20GPU-7%20Deployment%20Plan.md) |
+| Local GPU deployment | [GPU-5 implementation plan](deployments/homelab/gpu-5-implementation-plan.md) |
+| External provider deployment | [GPU-7 implementation plan](deployments/external/gpu-7-implementation-plan.md) |
+| Model download and verification | [GPU-5 Local Models Setup](doc/GPU-5%20Local%20Models%20Setup.md) |
+| mTLS setup | [GPU Plane mTLS Setup](doc/GPU%20Plane%20mTLS%20Setup.md) |
+| Test environment | [Test Environment Setup](doc/TEST_ENVIRONMENT_SETUP.md) |
+| Homelab operations | [Architecture](deployments/homelab/docs/architecture.md) · [Observability](deployments/homelab/docs/observability.md) · [Troubleshooting](deployments/homelab/docs/troubleshooting.md) |
+
+## Related projects
+
+- [Synanton Platform](https://github.com/synanton/platform) — orchestration and business workflows
+- [Synanton Resolutor](https://github.com/synanton/resolutor) — execution planning and scheduling
+- [Synanton Content Extractor](https://github.com/synanton/content_extractor) — content ingestion and extraction
 
 ## License
 
-Apache 2.0 License – see [LICENSE](LICENSE).
-
-------
-
-## References
-
-- [Platform Architecture 1.0 capstone](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-platform-architecture-1.0.md) — current platform-wide architecture and implementation status.
-- [Design 1.30 — AI and Model Runtime Plane](https://github.com/synanton/platform/blob/main/docs/architecture/synanton-design-1.30.md) — current approved platform-owned runtime contract; approval is not implementation acceptance.
-- [Design 1.20 — GPU Execution Plane (historical)](https://github.com/synanton/platform/blob/main/docs/architecture/archive/synanton-design-1.20.md) — prior isolation architecture, retained as history and folded into later platform design.
-- [Platform README](https://github.com/synanton/platform/blob/main/README.md) and [this repository's documentation index](doc/README.md).
+Apache 2.0. See [LICENSE](LICENSE).
