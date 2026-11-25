@@ -91,6 +91,13 @@ These are separate conclusions:
 - Production vLLM still occupies `node3`; `node2` appears physically free. B2 should remain **verification-only** until an authorized isolated window is approved.
 - No pod creation/reservation is permitted merely because a slot is allocatable.
 
+## B2 carry-forward notes
+
+B2 must explicitly record or resolve these known-unknowns instead of assuming them:
+- **Container/runtime CUDA version:** not independently verified in B1. Host reports CUDA 13.4; #770 records the historical vLLM/PyTorch stack separately. B2/B3 should verify inside the actual runtime before model compatibility claims.
+- **Node1/node2 small GPU memory use:** ~180 MiB / ~15 MiB is not attributed to Kubernetes compute pods. It is likely driver/context overhead but remains unconfirmed.
+- **Time-sliced allocatable slots:** `nvidia.com/gpu=2` per node is logical capacity; it does not imply two physical devices or two independent 16 GB partitions.
+
 ## Limitations
 
 - Container CUDA runtime version was not independently re-verified.
