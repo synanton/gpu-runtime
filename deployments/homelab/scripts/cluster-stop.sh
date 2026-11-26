@@ -32,6 +32,7 @@
 set -euo pipefail
 
 NAMESPACE="${NAMESPACE:-gpu-plane}"
+SYNANTON_NAMESPACE="${SYNANTON_NAMESPACE:-synanton}"
 CONTROL_PLANE="${CONTROL_PLANE:-node0}"
 WORKERS=(node1 node2 node3)
 REPLICAS_ANNOTATION="gpu.cluster/prev-replicas"
@@ -61,35 +62,75 @@ if ! $SKIP_SNAPSHOT; then
     || echo "warning: etcd snapshot failed or was skipped - continuing anyway" >&2
 fi
 
-echo "== recording current replica counts and scaling every '${NAMESPACE}' Deployment to 0"
-mapfile -t DEPLOYMENTS < <(kubectl -n "${NAMESPACE}" get deployments -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}')
-if [[ ${#DEPLOYMENTS[@]} -eq 0 ]]; then
-  echo "  (no Deployments found in '${NAMESPACE}' - nothing to scale down)"
-fi
-for d in "${DEPLOYMENTS[@]}"; do
-  current="$(kubectl -n "${NAMESPACE}" get deployment "$d" -o jsonpath='{.spec.replicas}')"
-  echo "-- ${d}: ${current} -> 0 (saved as ${REPLICAS_ANNOTATION})"
-  kubectl -n "${NAMESPACE}" annotate deployment "$d" "${REPLICAS_ANNOTATION}=${current}" --overwrite >/dev/null
-  kubectl -n "${NAMESPACE}" scale deployment "$d" --replicas=0 >/dev/null
-done
+record_and_scale() {
+  local namespace="$1"
+  local kind="$2"
+  mapfile -t objects < <(kubectl -n "${namespace}" get "${kind}" -o jsonpath='{range .items[*]}{.metadata.name}{"\n"}{end}' 2>/dev/null || true)
+  if [[ ${#objects[@]} -eq 0 ]]; then
+    echo "  (no ${kind}s found in '${namespace}')"
+    return
+  fi
+  local object current
+  for object in "${objects[@]}"; do
+    current="$(kubectl -n "${namespace}" get "${kind}" "$object" -o jsonpath='{.spec.replicas}')"
+    echo "-- ${namespace}/${kind}/${object}: ${current} -> 0 (saved as ${REPLICAS_ANNOTATION})"
+    kubectl -n "${namespace}" annotate "${kind}" "$object" "${REPLICAS_ANNOTATION}=${current}" --overwrite >/dev/null
+    kubectl -n "${namespace}" scale "${kind}" "$object" --replicas=0 >/dev/null
+  done
+}
 
-if [[ ${#DEPLOYMENTS[@]} -gt 0 ]]; then
-  echo "== waiting up to ${SCALE_DOWN_TIMEOUT}s for pods to terminate"
-  deadline=$(( $(date +%s) + SCALE_DOWN_TIMEOUT ))
+cleanup_terminal_pods() {
+  local namespace="$1"
+  local name phase
+  local -a stale=()
+  while read -r name phase; do
+    [[ -n "${name}" ]] || continue
+    case "${phase}" in
+      Failed|Unknown|Succeeded) stale+=("${name}") ;;
+    esac
+  done < <(kubectl -n "${namespace}" get pods \
+    -o custom-columns='NAME:.metadata.name,PHASE:.status.phase' --no-headers 2>/dev/null || true)
+
+  if [[ ${#stale[@]} -eq 0 ]]; then
+    echo "  ${namespace}: no terminal pod objects"
+    return
+  fi
+  echo "  ${namespace}: deleting ${#stale[@]} terminal pod object(s)"
+  printf '%s\n' "${stale[@]}" \
+    | xargs -r -n 50 kubectl -n "${namespace}" delete pod --force --grace-period=0 \
+        --ignore-not-found=true --wait=false >/dev/null
+}
+
+wait_for_namespace_empty() {
+  local namespace="$1"
+  local deadline=$(( $(date +%s) + SCALE_DOWN_TIMEOUT ))
   while true; do
-    remaining="$(kubectl -n "${NAMESPACE}" get pods --no-headers 2>/dev/null | grep -vc '^$' || true)"
+    local remaining
+    remaining="$(kubectl -n "${namespace}" get pods --no-headers 2>/dev/null | grep -vc '^$' || true)"
     if [[ "${remaining}" -eq 0 ]]; then
-      echo "  all pods terminated"
-      break
+      echo "  ${namespace}: all pods terminated"
+      return
     fi
     if (( $(date +%s) > deadline )); then
-      echo "warning: ${remaining} pod(s) still present after ${SCALE_DOWN_TIMEOUT}s - continuing anyway (drain below will force the issue)" >&2
-      kubectl -n "${NAMESPACE}" get pods
-      break
+      echo "warning: ${namespace}: ${remaining} pod(s) still present after ${SCALE_DOWN_TIMEOUT}s - continuing anyway (drain below will force the issue)" >&2
+      kubectl -n "${namespace}" get pods
+      return
     fi
     sleep 3
   done
-fi
+}
+
+echo "== recording current replica counts and scaling ${NAMESPACE} + ${SYNANTON_NAMESPACE} to 0"
+record_and_scale "${NAMESPACE}" deployment
+record_and_scale "${SYNANTON_NAMESPACE}" deployment
+record_and_scale "${SYNANTON_NAMESPACE}" statefulset
+
+echo "== deleting terminal/stale pods left by failed GPU admission"
+cleanup_terminal_pods "${NAMESPACE}"
+
+echo "== waiting up to ${SCALE_DOWN_TIMEOUT}s for pods to terminate"
+wait_for_namespace_empty "${NAMESPACE}"
+wait_for_namespace_empty "${SYNANTON_NAMESPACE}"
 
 echo "== cordoning workers"
 for n in "${WORKERS[@]}"; do
@@ -103,8 +144,9 @@ for n in "${WORKERS[@]}"; do
 done
 
 echo
-echo "== quiesced. Current '${NAMESPACE}' namespace state:"
+echo "== quiesced. Current namespace state:"
 kubectl -n "${NAMESPACE}" get pods -o wide
+kubectl -n "${SYNANTON_NAMESPACE}" get pods -o wide || true
 
 echo
 echo "== verifying no VRAM holders survive on workers (orphaned containers have"
