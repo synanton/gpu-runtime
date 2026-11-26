@@ -193,6 +193,25 @@ Confirm the storm has stopped (no new admission-error events) before deleting,
 and check every machine on 192.168.10.0/24 has a static IP (see the speech
 troubleshooting doc for the full story).
 
+`cluster-start.sh` is now **fail-closed**. It holds GPU Deployments at 0 while
+checking the NVIDIA device plugin and VRAM holders. If a required GPU workload
+cannot become ready, it prints:
+
+```text
+error: GPU runtime must be started in Kubernetes before Synanton is deployed.
+       ...
+       Synanton will NOT be started against broken GPU dependencies.
+```
+
+and exits before restoring Synanton. Do not bypass this with a manual
+`kubectl scale`: that recreates the `UnexpectedAdmissionError` pod storm.
+Fix the GPU runtime first, then re-run the start script.
+
+Both lifecycle scripts now delete terminal pod objects by `.status.phase`
+(`Failed`, `Unknown`, `Succeeded`), not by the short `STATUS` column. The old
+cleanup compared the wrong column and never removed the 653 failed
+`vllm-extraction` pods.
+
 ## Speech-project GPU conflict (both stacks needed)
 
 They can't coexist on one GPU node. If both must be installed, keep only one
